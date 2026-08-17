@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  background: #ffffff;
+  color: #0f172a;
+}
+input {
+  padding: 4px 6px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+}
+button {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: white;
+  cursor: pointer;
+}
+button:hover {
+  background: #f1f5f9;
+}
+table img {
+  display: block;
+}
+
+/* --- Sidebar: explicit CSS, independent of the Tailwind CDN script ---
+   The sidebar's dark background + light text is the single most
+   contrast-critical part of the UI. These rules are !important so the
+   sidebar always renders correctly even if the Tailwind CDN <script> is
+   slow, blocked by a network/firewall, or fails for any other reason —
+   rather than silently falling back to unstyled (near-invisible) text. */
+.ta-sidebar {
+  background-color: #0f172a !important;
+  color: #ffffff !important;
+}
+.ta-sidebar-header {
+  border-bottom: 1px solid #1e293b !important;
+}
+.ta-sidebar-subtitle {
+  color: #94a3b8 !important;
+}
+.ta-section-label {
+  color: #64748b !important;
+}
+.ta-nav-item {
+  color: #cbd5e1 !important;
+  background-color: transparent !important;
+  border: none;
+  cursor: pointer;
+}
+.ta-nav-item:hover {
+  background-color: #1e293b !important;
+  color: #ffffff !important;
+}
+.ta-nav-item.active {
+  background-color: #4f46e5 !important;
+  color: #ffffff !important;
+}
+.ta-nav-badge {
+  background-color: #f59e0b !important;
+  color: #ffffff !important;
+}
+.ta-nav-item.active .ta-nav-badge {
+  background-color: rgba(255, 255, 255, 0.25) !important;
+}
+.ta-sidebar-footer {
+  border-top: 1px solid #1e293b !important;
+}
+.ta-sidebar-card {
+  background-color: #1e293b !important;
+  color: #ffffff !important;
+}
+.ta-sidebar-manage-btn {
+  background-color: #334155 !important;
+  color: #ffffff !important;
+}
+.ta-sidebar-manage-btn:hover {
+  background-color: #475569 !important;
+}
