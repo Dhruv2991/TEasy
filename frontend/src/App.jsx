@@ -10,6 +10,8 @@ import ReviewApprovePage from "./ReviewApprovePage.jsx";
 import PendingIssuesPage from "./PendingIssuesPage.jsx";
 import TallyIntegrationPage from "./TallyIntegrationPage.jsx";
 import ComingSoonPage from "./ComingSoonPage.jsx";
+import GeneralSettingsPage from "./GeneralSettingsPage.jsx";
+import FirstRunSetup from "./FirstRunSetup.jsx";
 
 const PAGE_META = {
   dashboard: { title: "Dashboard", subtitle: "Welcome back" },
@@ -32,6 +34,13 @@ export default function App() {
   const [page, setPage] = useState("dashboard");
   const [counts, setCounts] = useState({ review: 0, issues: 0 });
   const [tallyConnected, setTallyConnected] = useState(false);
+  const [needsSetup, setNeedsSetup] = useState(null); // null = still checking
+
+  useEffect(() => {
+    api.getSettingsStatus()
+      .then((s) => setNeedsSetup(!s.groq_key_set))
+      .catch(() => setNeedsSetup(false)); // backend not up yet — don't block on a failed check
+  }, []);
 
   const refreshCounts = useCallback(async () => {
     try {
@@ -55,6 +64,13 @@ export default function App() {
     const t = setInterval(refreshCounts, 8000);
     return () => clearInterval(t);
   }, [refreshCounts]);
+
+  if (needsSetup === null) {
+    return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">Starting TEasy…</div>;
+  }
+  if (needsSetup) {
+    return <FirstRunSetup onDone={() => setNeedsSetup(false)} />;
+  }
 
   const meta = PAGE_META[page] || { title: page, subtitle: "" };
 
@@ -85,7 +101,7 @@ export default function App() {
       case "users":
         return <ComingSoonPage title="Users" description="This is currently a single-user local app — multi-user accounts aren't built yet." />;
       case "general-settings":
-        return <ComingSoonPage title="General Settings" description="App-wide preferences are on the roadmap." />;
+        return <GeneralSettingsPage />;
       default:
         return <ComingSoonPage title={page} />;
     }

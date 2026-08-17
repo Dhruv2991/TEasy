@@ -30,8 +30,15 @@ def _open_browser_when_ready():
 
 
 if __name__ == "__main__":
-    threading.Thread(target=_open_browser_when_ready, daemon=True).start()
-    print("Starting TEasy... your browser will open automatically.")
-    print(f"If it doesn't, go to http://{HOST}:{PORT}")
-    print("Keep this window open while using TEasy. Close it to stop the app.")
-    uvicorn.run(app, host=HOST, port=PORT, log_level="info")
+    try:
+        threading.Thread(target=_open_browser_when_ready, daemon=True).start()
+        print("Starting TEasy... your browser will open automatically.")
+        print(f"If it doesn't, go to http://{HOST}:{PORT}")
+        print("Keep this window open while using TEasy. Close it to stop the app.")
+        uvicorn.run(app, host=HOST, port=PORT, log_level="info")
+    except Exception:
+        import traceback
+        print("\nTEasy hit an error on startup:\n")
+        traceback.print_exc()
+        print("\nPress Enter to close this window...")
+        input()

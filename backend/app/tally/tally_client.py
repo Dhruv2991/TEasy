@@ -16,13 +16,15 @@ Tally's response to a voucher import is itself XML, shaped roughly like:
 or, on failure, includes a <LINEERROR> with a human-readable message (most
 commonly "Ledger ... does not exist" when a ledger name doesn't match).
 """
-import os
 import re
 import requests
 
-TALLY_HOST = os.environ.get("TALLY_HOST", "localhost")
-TALLY_PORT = int(os.environ.get("TALLY_PORT", "9000"))
-TALLY_URL = f"http://{TALLY_HOST}:{TALLY_PORT}"
+from ..settings import get_settings
+
+
+def _tally_url() -> str:
+    s = get_settings()
+    return f"http://{s.get('tally_host', 'localhost')}:{s.get('tally_port', 9000)}"
 
 
 class TallyConnectionError(Exception):
@@ -40,7 +42,7 @@ def test_connection() -> bool:
     so we just check we get a response, not that it's meaningful.
     """
     try:
-        resp = requests.post(TALLY_URL, data="<ENVELOPE></ENVELOPE>", timeout=5)
+        resp = requests.post(_tally_url(), data="<ENVELOPE></ENVELOPE>", timeout=5)
         return resp.status_code == 200
     except requests.exceptions.RequestException:
         return False
@@ -55,12 +57,13 @@ def send_voucher_xml(xml: str) -> dict:
     HTTP server not enabled, wrong port).
     """
     try:
-        resp = requests.post(TALLY_URL, data=xml.encode("utf-8"), timeout=30)
+        resp = requests.post(_tally_url(), data=xml.encode("utf-8"), timeout=30)
     except requests.exceptions.RequestException as e:
+        url = _tally_url()
         raise TallyConnectionError(
-            f"Could not reach Tally at {TALLY_URL}. Make sure Tally Prime is running, "
+            f"Could not reach Tally at {url}. Make sure Tally Prime is running, "
             f"the company is open, and its HTTP/XML server is enabled "
-            f"(F1 > Settings > Connectivity > act as Server, port {TALLY_PORT}). "
+            f"(F1 > Settings > Connectivity > act as Server, matching port). "
             f"Underlying error: {e}"
         )
 

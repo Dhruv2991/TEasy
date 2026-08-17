@@ -13,7 +13,7 @@ from .. import models, schemas
 from ..ocr.preprocess import preprocess_pipeline
 from ..ocr.bill_detector import crop_bills
 from ..ocr.grid_detector import detect_four_bill_grid
-from ..ocr.groq_vision import extract_bill_with_ai, extract_purchase_bill_with_ai, GROQ_API_KEY
+from ..ocr.groq_vision import extract_bill_with_ai, extract_purchase_bill_with_ai, _current_key as _groq_key
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 

@@ -17,9 +17,25 @@ import time
 
 import requests
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+from ..settings import get_settings
+
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
+
+
+def _current_key() -> str:
+    """Reads the key fresh each call, so saving it in the Settings page
+    takes effect immediately without restarting the app."""
+    return get_settings().get("groq_api_key") or ""
+
+
+def _current_model() -> str:
+    return get_settings().get("groq_vision_model") or "qwen/qwen3.6-27b"
+
+
+# Kept as a module attribute for any code (and any older import) that checks
+# `GROQ_API_KEY` truthily — evaluated at import time only, so prefer
+# `_current_key()` for anything that needs the live value.
+GROQ_API_KEY = _current_key()
 
 SALES_EXTRACTION_PROMPT = """You are an extremely careful accounting data-entry system reading ONE CROP from a handwritten Indian sales bill-book page. The original page contains FOUR separate bills arranged 2x2. This image is already cropped to exactly ONE bill. Never read handwriting from another quadrant.
 
@@ -191,16 +207,17 @@ def extract_bill_with_ai(image_path: str, prompt: str = SALES_EXTRACTION_PROMPT)
     the caller can fall back or surface a clear error rather than silently
     producing an empty transaction.
     """
-    if not GROQ_API_KEY:
+    api_key = _current_key()
+    if not api_key:
         raise RuntimeError(
-            "GROQ_API_KEY is not set. Get a free key at https://console.groq.com/keys "
-            "and set it as an environment variable (see backend/.env.example)."
+            "Groq API key is not set. Get a free key at https://console.groq.com/keys "
+            "and add it on the Settings page in the app."
         )
 
     image_data_uri = _encode_image(image_path)
 
     payload = {
-        "model": GROQ_VISION_MODEL,
+        "model": _current_model(),
         "messages": [
             {
                 "role": "user",
@@ -221,7 +238,7 @@ def extract_bill_with_ai(image_path: str, prompt: str = SALES_EXTRACTION_PROMPT)
     }
 
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 

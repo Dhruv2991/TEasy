@@ -59,6 +59,15 @@ export const api = {
   pushSingleToTally: (id) => req(`/tally/push/${id}`, { method: "POST" }),
 
   getRecentActivity: (limit = 10) => req(`/activity/recent?limit=${limit}`),
+
+  getSettings: () => req("/settings"),
+  saveSettings: (payload) =>
+    req("/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  getSettingsStatus: () => req("/settings/status"),
 };
 
 export function cropImageUrl(cropPath) {
