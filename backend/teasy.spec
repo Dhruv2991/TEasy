@@ -14,9 +14,12 @@ block_cipher = None
 # exactly that folder name at runtime.
 FRONTEND_DIST = os.path.join("..", "frontend", "dist")
 
-# PyInstaller's static analysis sometimes misses these two because of how
-# they lazy-import internals — collect everything explicitly so this stops
-# recurring across rebuilds.
+# Explicit and minimal on purpose: pandas' own collect_submodules() drags in
+# pandas.plotting._matplotlib (an optional extra we never use) which forces
+# a matplotlib import attempt during analysis and floods the build log with
+# harmless-but-alarming numpy/matplotlib ABI warnings. Only openpyxl needs
+# the full submodule sweep — it's genuinely lazy-imported in ways static
+# analysis misses.
 HIDDEN_IMPORTS = (
     [
         "uvicorn.logging",
@@ -29,9 +32,14 @@ HIDDEN_IMPORTS = (
         "uvicorn.protocols.websockets.auto",
         "uvicorn.lifespan",
         "uvicorn.lifespan.on",
+        "pandas",
+        "pandas._libs.tslibs.base",
+        "pandas._libs.tslibs.timestamps",
+        "pandas._libs.tslibs.nattype",
+        "pandas._libs.window.aggregations",
+        "pandas.io.formats.style",
     ]
     + collect_submodules("openpyxl")
-    + collect_submodules("pandas")
 )
 
 a = Analysis(
@@ -42,7 +50,7 @@ a = Analysis(
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["matplotlib"],
+    excludes=["matplotlib", "pandas.plotting._matplotlib", "sklearn", "scipy", "IPython"],
     cipher=block_cipher,
 )
 
