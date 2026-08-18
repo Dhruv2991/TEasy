@@ -1,46 +1,19 @@
 """
-Builds Tally-Prime-compatible XML for Sales and Purchase vouchers, in the
-standard "XML Import" envelope format Tally's HTTP/XML server accepts.
-
-Reference structure (Tally's own documented import format):
-
-<ENVELOPE>
-  <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
-  <BODY>
-    <IMPORTDATA>
-      <REQUESTDESC>
-        <REPORTNAME>Vouchers</REPORTNAME>
-        <STATICVARIABLES><SVCURRENTCOMPANY>...</SVCURRENTCOMPANY></STATICVARIABLES>
-      </REQUESTDESC>
-      <REQUESTDATA>
-        <TALLYMESSAGE xmlns:UDF="TallyUDF">
-          <VOUCHER VCHTYPE="Sales" ACTION="Create">
-            ...
-          </VOUCHER>
-        </TALLYMESSAGE>
-      </REQUESTDATA>
-    </IMPORTDATA>
-  </BODY>
-</ENVELOPE>
-
-A voucher has one party-side ledger entry (debit for sales, credit for
-purchase — Tally's sign convention is the opposite of plain-English "debit
-the customer" bookkeeping intuition, it's ISDEEMEDPOSITIVE per entry) and one
-or more ledger entries for the sales/purchase account + tax ledgers.
+Builds Tally-Prime-compatible XML for Sales, Purchase, Debit Note, and Credit Note vouchers.
+All Note types (Credit Note, Debit Note, CDN) are routed directly into Tally's "Debit Note" register.
 """
-import html
-import re
-from xml.sax.saxutils import escape as xml_escape
+
 from datetime import datetime
+from xml.sax.saxutils import escape as xml_escape
 
 
 def _tally_date(iso_date) -> str:
-    """Tally wants dates as YYYYMMDD. Falls back to today if unparseable/missing."""
+    """Formats date as YYYYMMDD for Tally XML."""
     if iso_date:
         try:
             if isinstance(iso_date, datetime):
                 return iso_date.strftime("%Y%m%d")
-            if hasattr(iso_date, "strftime"):  # datetime.date, pandas Timestamp, etc.
+            if hasattr(iso_date, "strftime"):
                 return iso_date.strftime("%Y%m%d")
             return datetime.fromisoformat(str(iso_date)).strftime("%Y%m%d")
         except (ValueError, TypeError):
@@ -48,70 +21,106 @@ def _tally_date(iso_date) -> str:
     return datetime.utcnow().strftime("%Y%m%d")
 
 
-def _ledger_entry(ledger_name: str, amount: float, is_deemed_positive: bool) -> str:
-    """
-    amount should be given as a positive number; is_deemed_positive controls
-    the debit/credit sign per Tally's convention (True = debit for this entry).
-    """
-    signed_amount = amount if is_deemed_positive else -amount
-    return f"""
-      <ALLLEDGERENTRIES.LIST>
-        <LEDGERNAME>{xml_escape(ledger_name)}</LEDGERNAME>
-        <ISDEEMEDPOSITIVE>{"Yes" if is_deemed_positive else "No"}</ISDEEMEDPOSITIVE>
-        <AMOUNT>{signed_amount:.2f}</AMOUNT>
-      </ALLLEDGERENTRIES.LIST>"""
-
-
 def find_rate_ledger(ledgers: list[dict], keyword: str, rate: float, exclude: list[str] | None = None) -> str | None:
-    """
-    Looks for an existing ledger whose name contains `keyword` (e.g. PURCHASE
-    or SALE) and the transaction's GST rate written as e.g. '@18%'. Many real
-    charts of accounts (like ones already set up for GST return filing) use
-    per-rate ledgers such as 'GSTPURCHASE@18%' instead of one flat account —
-    this finds the right one automatically instead of requiring manual setup.
-    Skips names containing anything in `exclude` (e.g. DISCOUNT, INTERSTATE)
-    unless no better match exists.
-    """
     if not rate:
         return None
-    rate_str = f"@{int(rate)}%" if rate == int(rate) else f"@{rate}%"
     keyword = keyword.upper()
     exclude = [e.upper() for e in (exclude or [])]
+    rate_clean = int(rate) if rate == int(rate) else rate
+    possible_rate_patterns = [f"@{rate_clean}%", f"{rate_clean}%", f"@{rate_clean}"]
 
     candidates = []
     for led in ledgers:
         name_upper = led["name"].upper().replace(" ", "")
-        if keyword in name_upper and rate_str.replace(" ", "") in name_upper:
-            candidates.append(led["name"])
+        if keyword in name_upper:
+            if any(p in name_upper for p in possible_rate_patterns):
+                candidates.append(led["name"])
 
     if not candidates:
         return None
-    # Prefer a candidate that doesn't contain any excluded word (e.g. skip
-    # 'DISCOUNT@18%' or 'INTERSTATE PURCHASE@18%' in favour of a plain one).
     clean = [c for c in candidates if not any(ex in c.upper() for ex in exclude)]
     return (clean or candidates)[0]
 
 
 def _ledger_exists(ledgers: list[dict], name: str) -> bool:
+    if not name:
+        return False
     name_lower = name.strip().lower()
     return any(led["name"].strip().lower() == name_lower for led in ledgers)
 
 
-def _create_ledger_master_xml(name: str, under: str, gst_tax_type: str | None = None) -> str:
-    """
-    A LEDGER master TALLYMESSAGE with ACTION="Create". When included in the
-    same import batch ahead of a VOUCHER message, Tally creates the master
-    first and the voucher then succeeds — no manual ledger creation needed.
-    If gst_tax_type is given (e.g. 'Central Tax'), classifies it as a GST
-    duty ledger under Duties & Taxes; otherwise it's a plain ledger (used for
-    party/supplier ledgers under Sundry Debtors/Creditors).
-    """
+def _resolve_ledger_names(vch_type: str, rate: float, config: dict, ledgers: list[dict]) -> dict:
+    rate_int = int(round(rate)) if rate else 0
+    half_rate = rate / 2.0 if rate else 0.0
+    half_rate_int = int(round(half_rate)) if half_rate else 0
+
+    if vch_type.upper() in ["PURCHASE", "DEBIT NOTE"]:
+        cfg_main = config.get("purchase_ledger", "Purchase Account")
+        cfg_cgst = config.get("input_cgst_ledger", "Input CGST")
+        cfg_sgst = config.get("input_sgst_ledger", "Input SGST")
+        cfg_igst = config.get("input_igst_ledger", "Input IGST")
+
+        main_default = f"GSTPURCHASE@{rate_int}%" if rate_int > 0 else cfg_main
+        cgst_default = f"CGST@{half_rate_int}%" if half_rate_int > 0 else cfg_cgst
+        sgst_default = f"SGST@{half_rate_int}%" if half_rate_int > 0 else cfg_sgst
+        igst_default = f"IGST@{rate_int}%" if rate_int > 0 else cfg_igst
+
+        main_ledger = find_rate_ledger(ledgers, "PURCHASE", rate, exclude=["DISCOUNT", "INTERSTATE"])
+        cgst_ledger = find_rate_ledger(ledgers, "CGST", half_rate)
+        sgst_ledger = find_rate_ledger(ledgers, "SGST", half_rate)
+        igst_ledger = find_rate_ledger(ledgers, "IGST", rate)
+
+        if not main_ledger:
+            main_ledger = cfg_main if _ledger_exists(ledgers, cfg_main) else main_default
+        if not cgst_ledger:
+            cgst_ledger = cfg_cgst if _ledger_exists(ledgers, cfg_cgst) else cgst_default
+        if not sgst_ledger:
+            sgst_ledger = cfg_sgst if _ledger_exists(ledgers, cfg_sgst) else sgst_default
+        if not igst_ledger:
+            igst_ledger = cfg_igst if _ledger_exists(ledgers, cfg_igst) else igst_default
+
+    else:
+        cfg_main = config.get("sales_ledger", "Sales Account")
+        cfg_cgst = config.get("output_cgst_ledger", "Output CGST")
+        cfg_sgst = config.get("output_sgst_ledger", "Output SGST")
+        cfg_igst = config.get("output_igst_ledger", "Output IGST")
+
+        main_default = f"GSTSALE@{rate_int}%" if rate_int > 0 else cfg_main
+        cgst_default = f"CGST@{half_rate_int}%" if half_rate_int > 0 else cfg_cgst
+        sgst_default = f"SGST@{half_rate_int}%" if half_rate_int > 0 else cfg_sgst
+        igst_default = f"IGST@{rate_int}%" if rate_int > 0 else cfg_igst
+
+        main_ledger = find_rate_ledger(ledgers, "SALE", rate, exclude=["DISCOUNT"])
+        cgst_ledger = find_rate_ledger(ledgers, "CGST", half_rate)
+        sgst_ledger = find_rate_ledger(ledgers, "SGST", half_rate)
+        igst_ledger = find_rate_ledger(ledgers, "IGST", rate)
+
+        if not main_ledger:
+            main_ledger = cfg_main if _ledger_exists(ledgers, cfg_main) else main_default
+        if not cgst_ledger:
+            cgst_ledger = cfg_cgst if _ledger_exists(ledgers, cfg_cgst) else cgst_default
+        if not sgst_ledger:
+            sgst_ledger = cfg_sgst if _ledger_exists(ledgers, cfg_sgst) else sgst_default
+        if not igst_ledger:
+            igst_ledger = cfg_igst if _ledger_exists(ledgers, cfg_igst) else igst_default
+
+    round_off_ledger = config.get("round_off_ledger") or "ROUNDOFF"
+
+    return {
+        "main": main_ledger,
+        "cgst": cgst_ledger,
+        "sgst": sgst_ledger,
+        "igst": igst_ledger,
+        "round_off": round_off_ledger,
+    }
+
+
+def _create_ledger_master_xml(name: str, under: str, gst_duty_type: str | None = None) -> str:
     gst_fields = ""
-    if gst_tax_type:
+    if gst_duty_type:
         gst_fields = f"""
-            <ISBILLWISEON>No</ISBILLWISEON>
             <TAXTYPE>GST</TAXTYPE>
-            <GSTDUTYHEAD>{xml_escape(gst_tax_type)}</GSTDUTYHEAD>"""
+            <GSTDUTYHEAD>{xml_escape(gst_duty_type)}</GSTDUTYHEAD>"""
     return f"""
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
           <LEDGER NAME="{xml_escape(name)}" ACTION="Create">
@@ -119,114 +128,103 @@ def _create_ledger_master_xml(name: str, under: str, gst_tax_type: str | None = 
               <NAME>{xml_escape(name)}</NAME>
             </NAME.LIST>
             <PARENT>{xml_escape(under)}</PARENT>
-            <ISBILLWISEON>Yes</ISBILLWISEON>{gst_fields}
+            <ISBILLWISEON>No</ISBILLWISEON>{gst_fields}
           </LEDGER>
         </TALLYMESSAGE>"""
 
 
-def build_sales_voucher_xml(tx: dict, config: dict, ledgers: list[dict] | None = None) -> str:
-    """
-    tx: dict with party, date, invoice_number, taxable_value, cgst, sgst,
-        igst, total_value (matches the Transaction model's fields).
-    config: dict from tally.config.get_tally_config().
-    ledgers: live ledger list from tally_client.fetch_ledgers(), used to
-        auto-pick rate-specific ledgers and auto-create missing ones. If
-        None, falls back to the flat config-only behaviour (manual mapping).
-    """
+def _ledger_entry(name: str, amount: float, is_deemed_positive: bool, rate_pct: float | None = None) -> str:
+    amt_val = -abs(amount) if is_deemed_positive else abs(amount)
+    dp_str = "Yes" if is_deemed_positive else "No"
+    rate_tag = f"\n          <RATE>{int(round(rate_pct))} %</RATE>" if rate_pct and rate_pct > 0 else ""
+
+    return f"""
+        <ALLLEDGERENTRIES.LIST>
+          <LEDGERNAME>{xml_escape(name)}</LEDGERNAME>
+          <ISDEEMEDPOSITIVE>{dp_str}</ISDEEMEDPOSITIVE>
+          <AMOUNT>{amt_val:.2f}</AMOUNT>{rate_tag}
+        </ALLLEDGERENTRIES.LIST>"""
+
+
+def build_voucher_xml(vch_type_str: str, tx: dict, config: dict, ledgers: list[dict] | None = None) -> str:
     ledgers = ledgers or []
     date = _tally_date(tx.get("date"))
-    party = tx.get("party") or config["cash_ledger"]
+    party = tx.get("party") or "Unknown Party"
     invoice_number = tx.get("invoice_number") or ""
-    narration = f"Auto-entered by TEasy from scanned bill{' #' + invoice_number if invoice_number else ''}"
-    rate = tx.get("gst_rate") or 0
+    narration = f"Auto-entered by TEasy ({vch_type_str}){' #' + invoice_number if invoice_number else ''}"
 
-    sales_ledger = find_rate_ledger(ledgers, "SALE", rate, exclude=["DISCOUNT"]) or config["sales_ledger"]
+    taxable = float(tx.get("taxable_value") or 0.0)
+    cgst = float(tx.get("cgst") or 0.0)
+    sgst = float(tx.get("sgst") or 0.0)
+    igst = float(tx.get("igst") or 0.0)
+    total = float(tx.get("total_value") or 0.0)
+
+    rate = float(tx.get("gst_rate") or 0.0)
+    if not rate and taxable > 0:
+        rate = round(((cgst + sgst + igst) / taxable) * 100, 2)
+    half_rate = rate / 2.0 if rate > 0 else None
+
+    calculated = taxable + cgst + sgst + igst
+    diff = round(total - calculated, 2)
+
+    names = _resolve_ledger_names(vch_type_str, rate, config, ledgers)
+
+    # Accounting Signs (IsDeemedPositive)
+    if vch_type_str.upper() in ["PURCHASE"]:
+        party_dp = False
+        main_dp = True
+    else:  # SALES, DEBIT NOTE
+        party_dp = True
+        main_dp = False
+
+    parent_group = "Sundry Creditors" if vch_type_str.upper() in ["PURCHASE", "DEBIT NOTE"] else "Sundry Debtors"
+    main_group = "Purchase Accounts" if vch_type_str.upper() in ["PURCHASE", "DEBIT NOTE"] else "Sales Accounts"
 
     masters = []
-    if ledgers and not _ledger_exists(ledgers, party):
-        masters.append(_create_ledger_master_xml(party, "Sundry Debtors"))
-    if ledgers and not _ledger_exists(ledgers, sales_ledger):
-        masters.append(_create_ledger_master_xml(sales_ledger, "Sales Accounts"))
-
-    tax_ledgers = {
-        "cgst": (config["output_cgst_ledger"], "Central Tax"),
-        "sgst": (config["output_sgst_ledger"], "State Tax"),
-        "igst": (config["output_igst_ledger"], "Integrated Tax"),
-    }
-    for field, (ledger_name, tax_type) in tax_ledgers.items():
-        if tx.get(field) and ledgers and not _ledger_exists(ledgers, ledger_name):
-            masters.append(_create_ledger_master_xml(ledger_name, "Duties & Taxes", gst_tax_type=tax_type))
+    if ledgers:
+        if not _ledger_exists(ledgers, party):
+            masters.append(_create_ledger_master_xml(party, parent_group))
+        if not _ledger_exists(ledgers, names["main"]):
+            masters.append(_create_ledger_master_xml(names["main"], main_group))
+        if cgst > 0 and not _ledger_exists(ledgers, names["cgst"]):
+            masters.append(_create_ledger_master_xml(names["cgst"], "Duties & Taxes", "Central Tax"))
+        if sgst > 0 and not _ledger_exists(ledgers, names["sgst"]):
+            masters.append(_create_ledger_master_xml(names["sgst"], "Duties & Taxes", "State Tax"))
+        if igst > 0 and not _ledger_exists(ledgers, names["igst"]):
+            masters.append(_create_ledger_master_xml(names["igst"], "Duties & Taxes", "Integrated Tax"))
+        if abs(diff) >= 0.01 and not _ledger_exists(ledgers, names["round_off"]):
+            masters.append(_create_ledger_master_xml(names["round_off"], "Indirect Expenses"))
 
     entries = []
-    # Party ledger: debited (money owed TO the business) for the full total.
-    entries.append(_ledger_entry(party, tx["total_value"], is_deemed_positive=True))
-    # Sales account: credited for the taxable value.
-    entries.append(_ledger_entry(sales_ledger, tx["taxable_value"], is_deemed_positive=False))
-    if tx.get("cgst"):
-        entries.append(_ledger_entry(config["output_cgst_ledger"], tx["cgst"], is_deemed_positive=False))
-    if tx.get("sgst"):
-        entries.append(_ledger_entry(config["output_sgst_ledger"], tx["sgst"], is_deemed_positive=False))
-    if tx.get("igst"):
-        entries.append(_ledger_entry(config["output_igst_ledger"], tx["igst"], is_deemed_positive=False))
+    entries.append(_ledger_entry(party, total, is_deemed_positive=party_dp))
+    entries.append(_ledger_entry(names["main"], taxable, is_deemed_positive=main_dp))
+    if cgst:
+        entries.append(_ledger_entry(names["cgst"], cgst, is_deemed_positive=main_dp, rate_pct=half_rate))
+    if sgst:
+        entries.append(_ledger_entry(names["sgst"], sgst, is_deemed_positive=main_dp, rate_pct=half_rate))
+    if igst:
+        entries.append(_ledger_entry(names["igst"], igst, is_deemed_positive=main_dp, rate_pct=rate))
+
+    # CORRECTED ROUND-OFF BALANCING
+    if abs(diff) >= 0.01:
+        if not party_dp:  # Purchase / Debit Note
+            round_off_dp = (diff > 0)
+        else:             # Sales / Credit Note
+            round_off_dp = (diff < 0)
+        entries.append(_ledger_entry(names["round_off"], abs(diff), is_deemed_positive=round_off_dp))
+
+    vch_no_tag = f"<VOUCHERNUMBER>{xml_escape(invoice_number)}</VOUCHERNUMBER>" if invoice_number else ""
 
     voucher = f"""
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
-          <VOUCHER VCHTYPE="Sales" ACTION="Create">
+          <VOUCHER VCHTYPE="{vch_type_str}" ACTION="Create">
             <DATE>{date}</DATE>
-            <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+            <VOUCHERTYPENAME>{vch_type_str}</VOUCHERTYPENAME>
+            {vch_no_tag}
             <PARTYLEDGERNAME>{xml_escape(party)}</PARTYLEDGERNAME>
             <REFERENCE>{xml_escape(invoice_number)}</REFERENCE>
-            <NARRATION>{xml_escape(narration)}</NARRATION>
-            {''.join(entries)}
-          </VOUCHER>
-        </TALLYMESSAGE>"""
-    return "".join(masters) + voucher
-
-
-def build_purchase_voucher_xml(tx: dict, config: dict, ledgers: list[dict] | None = None) -> str:
-    ledgers = ledgers or []
-    date = _tally_date(tx.get("date"))
-    party = tx.get("party") or "Unknown Supplier"
-    invoice_number = tx.get("invoice_number") or ""
-    narration = f"Auto-entered by TEasy from scanned bill{' #' + invoice_number if invoice_number else ''}"
-    rate = tx.get("gst_rate") or 0
-
-    purchase_ledger = find_rate_ledger(ledgers, "PURCHASE", rate, exclude=["DISCOUNT", "INTERSTATE"]) or config["purchase_ledger"]
-
-    masters = []
-    if ledgers and not _ledger_exists(ledgers, party):
-        masters.append(_create_ledger_master_xml(party, "Sundry Creditors"))
-    if ledgers and not _ledger_exists(ledgers, purchase_ledger):
-        masters.append(_create_ledger_master_xml(purchase_ledger, "Purchase Accounts"))
-
-    tax_ledgers = {
-        "cgst": (config["input_cgst_ledger"], "Central Tax"),
-        "sgst": (config["input_sgst_ledger"], "State Tax"),
-        "igst": (config["input_igst_ledger"], "Integrated Tax"),
-    }
-    for field, (ledger_name, tax_type) in tax_ledgers.items():
-        if tx.get(field) and ledgers and not _ledger_exists(ledgers, ledger_name):
-            masters.append(_create_ledger_master_xml(ledger_name, "Duties & Taxes", gst_tax_type=tax_type))
-
-    entries = []
-    # Purchase account: debited for the taxable value.
-    entries.append(_ledger_entry(purchase_ledger, tx["taxable_value"], is_deemed_positive=True))
-    if tx.get("cgst"):
-        entries.append(_ledger_entry(config["input_cgst_ledger"], tx["cgst"], is_deemed_positive=True))
-    if tx.get("sgst"):
-        entries.append(_ledger_entry(config["input_sgst_ledger"], tx["sgst"], is_deemed_positive=True))
-    if tx.get("igst"):
-        entries.append(_ledger_entry(config["input_igst_ledger"], tx["igst"], is_deemed_positive=True))
-    # Supplier ledger: credited (money the business owes) for the full total.
-    entries.append(_ledger_entry(party, tx["total_value"], is_deemed_positive=False))
-
-    voucher = f"""
-        <TALLYMESSAGE xmlns:UDF="TallyUDF">
-          <VOUCHER VCHTYPE="Purchase" ACTION="Create">
-            <DATE>{date}</DATE>
-            <VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME>
-            <PARTYLEDGERNAME>{xml_escape(party)}</PARTYLEDGERNAME>
-            <REFERENCE>{xml_escape(invoice_number)}</REFERENCE>
+            <ISINVOICE>Yes</ISINVOICE>
+            <PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>
             <NARRATION>{xml_escape(narration)}</NARRATION>
             {''.join(entries)}
           </VOUCHER>
@@ -259,15 +257,17 @@ def build_voucher_envelope(tx: dict, config: dict) -> str:
     try:
         from .tally_client import fetch_ledgers
         ledgers = fetch_ledgers()
-    except Exception as e:
-        # If the live fetch fails for any reason, fall back to the old
-        # manual-mapping-only behaviour rather than blocking the push —
-        # but print it so it's visible in the console instead of silent.
-        print(f"[TEasy] Ledger auto-fetch failed, falling back to manual mapping: {e}")
+    except Exception:
         ledgers = []
 
-    if tx["type"] == "PURCHASE":
-        message = build_purchase_voucher_xml(tx, config, ledgers)
+    raw_type = str(tx.get("type", "PURCHASE")).upper().replace("_", " ")
+
+    if any(k in raw_type for k in ["CREDIT", "DEBIT", "NOTE", "CDN"]):
+        vch_type = "Debit Note"
+    elif "SALE" in raw_type:
+        vch_type = "Sales"
     else:
-        message = build_sales_voucher_xml(tx, config, ledgers)
+        vch_type = "Purchase"
+
+    message = build_voucher_xml(vch_type, tx, config, ledgers)
     return wrap_envelope(message, config["company_name"])

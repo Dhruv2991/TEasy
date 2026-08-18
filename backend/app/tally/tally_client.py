@@ -1,25 +1,12 @@
 """
-Sends XML to Tally Prime's built-in HTTP/XML server (must be enabled in Tally:
-F1 > Settings > Connectivity > Client/Server configuration > act as Server,
-default port 9000) and parses the response for success/failure.
-
-Tally's response to a voucher import is itself XML, shaped roughly like:
-
-<RESPONSE>
-  <CREATED>1</CREATED>
-  <ALTERED>0</ALTERED>
-  <ERRORS>0</ERRORS>
-  <LASTVCHID>123</LASTVCHID>
-  <LASTMID>123</LASTMID>
-</RESPONSE>
-
-or, on failure, includes a <LINEERROR> with a human-readable message (most
-commonly "Ledger ... does not exist" when a ledger name doesn't match).
+Sends XML to Tally Prime's built-in HTTP/XML server and parses responses.
 """
+
 import re
 import time
-import requests
 from xml.etree import ElementTree as ET
+from xml.sax.saxutils import escape as xml_escape
+import requests
 
 from ..settings import get_settings
 
@@ -38,11 +25,7 @@ class TallyVoucherError(Exception):
 
 
 def test_connection() -> bool:
-    """
-    True if Tally's HTTP server responds at all. Tally answers even a
-    malformed/empty request with *some* XML rather than a connection error,
-    so we just check we get a response, not that it's meaningful.
-    """
+    """True if Tally's HTTP server responds at all."""
     try:
         resp = requests.post(_tally_url(), data="<ENVELOPE></ENVELOPE>", timeout=5)
         return resp.status_code == 200
@@ -53,10 +36,7 @@ def test_connection() -> bool:
 def send_voucher_xml(xml: str) -> dict:
     """
     POSTs voucher XML to Tally and returns a parsed summary:
-    {"created": int, "altered": int, "errors": int, "error_message": str|None}
-
-    Raises TallyConnectionError if Tally isn't reachable at all (not running,
-    HTTP server not enabled, wrong port).
+    {"created": int, "altered": int, "errors": int, "error_message": str|None, "raw_response": str}
     """
     try:
         resp = requests.post(_tally_url(), data=xml.encode("utf-8"), timeout=30)
@@ -76,11 +56,11 @@ def send_voucher_xml(xml: str) -> dict:
     errors = _extract_int(text, "ERRORS")
 
     error_message = None
-    line_error_match = re.search(r"<LINEERROR>(.*?)</LINEERROR>", text, re.DOTALL)
+    line_error_match = re.search(r"<LINEERROR>(.*?)</LINEERROR>", text, re.DOTALL | re.IGNORECASE)
     if line_error_match:
         error_message = line_error_match.group(1).strip()
     elif errors and errors > 0:
-        error_message = "Tally reported an error but did not include a specific message."
+        error_message = "Tally reported an error during voucher import but did not specify details."
 
     return {
         "created": created or 0,
@@ -92,12 +72,12 @@ def send_voucher_xml(xml: str) -> dict:
 
 
 def _extract_int(text: str, tag: str) -> int | None:
-    m = re.search(rf"<{tag}>(\d+)</{tag}>", text)
+    m = re.search(rf"<{tag}>(\d+)</{tag}>", text, re.IGNORECASE)
     return int(m.group(1)) if m else None
 
 
 _LEDGER_CACHE: dict = {"company": None, "at": 0.0, "ledgers": []}
-_LEDGER_CACHE_TTL_SECONDS = 60  # short-lived: masters can change mid-session
+_LEDGER_CACHE_TTL_SECONDS = 60
 
 
 _LEDGER_LIST_REQUEST = """<ENVELOPE>
@@ -128,10 +108,10 @@ _LEDGER_LIST_REQUEST = """<ENVELOPE>
 def fetch_ledgers(force_refresh: bool = False) -> list[dict]:
     """
     Returns the live list of ledgers in the current Tally company as
-    [{"name": ..., "parent": ...}, ...]. Cached briefly per-company to avoid
-    a round trip before every single voucher in a batch push.
+    [{"name": ..., "parent": ...}, ...]. Cached briefly per-company.
     """
     from .config import get_tally_config
+
     company = get_tally_config().get("company_name", "")
 
     now = time.time()
@@ -142,7 +122,7 @@ def fetch_ledgers(force_refresh: bool = False) -> list[dict]:
     ):
         return _LEDGER_CACHE["ledgers"]
 
-    xml = _LEDGER_LIST_REQUEST.format(company=company)
+    xml = _LEDGER_LIST_REQUEST.format(company=xml_escape(company))
     try:
         resp = requests.post(_tally_url(), data=xml.encode("utf-8"), timeout=15)
         resp.raise_for_status()
@@ -150,8 +130,6 @@ def fetch_ledgers(force_refresh: bool = False) -> list[dict]:
         raise TallyConnectionError(f"Could not fetch ledger list from Tally: {e}")
 
     ledgers = []
-    # Tally's XML sometimes contains stray control characters that break
-    # strict parsing — strip anything not valid in XML 1.0 before parsing.
     clean_text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", resp.text)
     try:
         root = ET.fromstring(clean_text)
@@ -162,8 +140,6 @@ def fetch_ledgers(force_refresh: bool = False) -> list[dict]:
             if name:
                 ledgers.append({"name": name.strip(), "parent": (parent or "").strip()})
     except ET.ParseError:
-        # Fall back to a regex scrape rather than failing hard. PARENT may
-        # carry a TYPE="String" attribute, so don't assume a bare tag.
         for m in re.finditer(
             r'<LEDGER NAME="([^"]+)"[^>]*>.*?<PARENT[^>]*>([^<]*)</PARENT>',
             clean_text,

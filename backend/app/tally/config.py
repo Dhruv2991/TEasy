@@ -1,20 +1,7 @@
 """
 Ledger name configuration for Tally voucher generation.
-
-Tally identifies accounts purely by LEDGER NAME (exact string match) — there's
-no stable numeric ID to key off like most databases. That means the ledger
-names below must match your actual Tally company's ledger names character
-for character, or Tally will reject the voucher (or worse, silently create a
-new ledger with that name if auto-creation is on).
-
-Edit config/tally_config.json (created on first run with these defaults) to
-match your company's actual ledger names before pushing anything to Tally.
-Party ledgers (customer/supplier names) are NOT listed here — those come
-straight from each transaction's "party" field, so they must match your
-Tally party ledgers exactly too (this is the "ledger matching" step flagged
-as future work in the original project design — for now, a mismatch here
-means Tally will error on that voucher rather than silently misfiling it).
 """
+
 import json
 import os
 from ..paths import get_data_dir
@@ -30,7 +17,7 @@ DEFAULT_CONFIG = {
     "input_sgst_ledger": "Input SGST",
     "input_igst_ledger": "Input IGST",
     "cash_ledger": "Cash",
-    "round_off_ledger": "Round Off",
+    "round_off_ledger": "ROUNDOFF",
 }
 
 
@@ -43,8 +30,13 @@ def get_tally_config() -> dict:
     if not os.path.exists(path):
         save_tally_config(DEFAULT_CONFIG)
         return dict(DEFAULT_CONFIG)
-    with open(path, "r", encoding="utf-8") as f:
-        loaded = json.load(f)
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        loaded = {}
+
     merged = dict(DEFAULT_CONFIG)
     merged.update(loaded)
     return merged
@@ -53,6 +45,9 @@ def get_tally_config() -> dict:
 def save_tally_config(config: dict) -> dict:
     merged = dict(DEFAULT_CONFIG)
     merged.update(config)
+
+    os.makedirs(os.path.dirname(_config_path()), exist_ok=True)
     with open(_config_path(), "w", encoding="utf-8") as f:
         json.dump(merged, f, indent=2)
+
     return merged

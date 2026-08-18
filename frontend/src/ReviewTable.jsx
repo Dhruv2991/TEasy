@@ -9,8 +9,24 @@ function TransactionRow({ bill, onChanged }) {
   const [form, setForm] = useState(tx || {});
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => setForm(tx || {}), [tx]);
+  // Prevent background polling from overwriting the form while actively editing
+  useEffect(() => {
+    if (!editing) {
+      setForm(tx || {});
+    }
+  }, [tx, editing]);
+
   if (!tx) return null;
+
+  const startEdit = () => {
+    setForm({ ...tx });
+    setEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setForm({ ...tx });
+    setEditing(false);
+  };
 
   const save = async () => {
     setBusy(true);
@@ -52,11 +68,45 @@ function TransactionRow({ bill, onChanged }) {
       </td>
       {editing ? (
         <>
-          <td className="p-3"><input className="border border-slate-300 rounded px-2 py-1 text-sm w-32" value={form.party || ""} onChange={(e) => setForm({ ...form, party: e.target.value })} /></td>
-          <td className="p-3"><input className="border border-slate-300 rounded px-2 py-1 text-sm w-28" value={form.date || ""} onChange={(e) => setForm({ ...form, date: e.target.value })} /></td>
-          <td className="p-3"><input className="border border-slate-300 rounded px-2 py-1 text-sm w-24" value={form.invoice_number || ""} onChange={(e) => setForm({ ...form, invoice_number: e.target.value })} /></td>
-          <td className="p-3"><input type="number" className="border border-slate-300 rounded px-2 py-1 text-sm w-24" value={form.total_value || 0} onChange={(e) => setForm({ ...form, total_value: parseFloat(e.target.value) })} /></td>
-          <td className="p-3"><input type="number" className="border border-slate-300 rounded px-2 py-1 text-sm w-16" value={form.gst_rate || 0} onChange={(e) => setForm({ ...form, gst_rate: parseFloat(e.target.value) })} /></td>
+          <td className="p-3">
+            <input
+              className="border border-slate-300 rounded px-2 py-1 text-sm w-32"
+              value={form.party || ""}
+              onChange={(e) => setForm({ ...form, party: e.target.value })}
+            />
+          </td>
+          <td className="p-3">
+            <input
+              type="text"
+              className="border border-slate-300 rounded px-2 py-1 text-sm w-28"
+              value={form.date || ""}
+              onChange={(e) => setForm({ ...form, date: e.target.value })}
+            />
+          </td>
+          <td className="p-3">
+            <input
+              type="text"
+              className="border border-slate-300 rounded px-2 py-1 text-sm w-24"
+              value={form.invoice_number || ""}
+              onChange={(e) => setForm({ ...form, invoice_number: e.target.value })}
+            />
+          </td>
+          <td className="p-3">
+            <input
+              type="number"
+              className="border border-slate-300 rounded px-2 py-1 text-sm w-24"
+              value={form.total_value ?? 0}
+              onChange={(e) => setForm({ ...form, total_value: parseFloat(e.target.value) || 0 })}
+            />
+          </td>
+          <td className="p-3">
+            <input
+              type="number"
+              className="border border-slate-300 rounded px-2 py-1 text-sm w-16"
+              value={form.gst_rate ?? 0}
+              onChange={(e) => setForm({ ...form, gst_rate: parseFloat(e.target.value) || 0 })}
+            />
+          </td>
         </>
       ) : (
         <>
@@ -65,10 +115,14 @@ function TransactionRow({ bill, onChanged }) {
           <td className="p-3 text-sm text-slate-600">
             {tx.invoice_number || "—"}
             {tx.possible_duplicate && (
-              <span className="ml-1.5 text-[10px] font-semibold bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">DUPLICATE?</span>
+              <span className="ml-1.5 text-[10px] font-semibold bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">
+                DUPLICATE?
+              </span>
             )}
           </td>
-          <td className="p-3 text-sm font-medium text-slate-900">₹{Number(tx.total_value).toLocaleString("en-IN")}</td>
+          <td className="p-3 text-sm font-medium text-slate-900">
+            ₹{Number(tx.total_value).toLocaleString("en-IN")}
+          </td>
           <td className="p-3 text-sm text-slate-600">{tx.gst_rate}%</td>
         </>
       )}
@@ -78,7 +132,9 @@ function TransactionRow({ bill, onChanged }) {
           <div className="mt-1 text-[10px] font-medium text-amber-700">Manual check required</div>
         )}
       </td>
-      <td className="p-3"><StatusBadge status={tx.status} /></td>
+      <td className="p-3">
+        <StatusBadge status={tx.status} />
+      </td>
       <td className="p-3">
         {tx.tally_status && tx.tally_status !== "NOT_SENT" ? (
           <StatusBadge status={tx.tally_status} />
@@ -89,14 +145,44 @@ function TransactionRow({ bill, onChanged }) {
       <td className="p-3 whitespace-nowrap">
         {editing ? (
           <div className="flex gap-1.5">
-            <button disabled={busy} onClick={save} className="text-xs bg-slate-900 text-white px-2.5 py-1 rounded-md">Save</button>
-            <button disabled={busy} onClick={() => setEditing(false)} className="text-xs border border-slate-300 px-2.5 py-1 rounded-md">Cancel</button>
+            <button
+              disabled={busy}
+              onClick={save}
+              className="text-xs bg-slate-900 text-white px-2.5 py-1 rounded-md"
+            >
+              Save
+            </button>
+            <button
+              disabled={busy}
+              onClick={cancelEdit}
+              className="text-xs border border-slate-300 px-2.5 py-1 rounded-md"
+            >
+              Cancel
+            </button>
           </div>
         ) : (
           <div className="flex gap-1.5">
-            <button disabled={busy} onClick={() => setEditing(true)} className="text-xs border border-slate-300 px-2.5 py-1 rounded-md hover:bg-slate-100">Edit</button>
-            <button disabled={busy || tx.status === "APPROVED"} onClick={() => act(api.approveTransaction)} className="text-xs bg-emerald-600 text-white px-2.5 py-1 rounded-md disabled:opacity-40">Approve</button>
-            <button disabled={busy || tx.status === "REJECTED"} onClick={() => act(api.rejectTransaction)} className="text-xs bg-rose-600 text-white px-2.5 py-1 rounded-md disabled:opacity-40">Reject</button>
+            <button
+              disabled={busy}
+              onClick={startEdit}
+              className="text-xs border border-slate-300 px-2.5 py-1 rounded-md hover:bg-slate-100"
+            >
+              Edit
+            </button>
+            <button
+              disabled={busy || tx.status === "APPROVED"}
+              onClick={() => act(api.approveTransaction)}
+              className="text-xs bg-emerald-600 text-white px-2.5 py-1 rounded-md disabled:opacity-40"
+            >
+              Approve
+            </button>
+            <button
+              disabled={busy || tx.status === "REJECTED"}
+              onClick={() => act(api.rejectTransaction)}
+              className="text-xs bg-rose-600 text-white px-2.5 py-1 rounded-md disabled:opacity-40"
+            >
+              Reject
+            </button>
           </div>
         )}
       </td>

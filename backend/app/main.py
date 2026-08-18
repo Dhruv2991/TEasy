@@ -1,6 +1,11 @@
 import os
 import sys
 from dotenv import load_dotenv
+import sys
+from app.security.hwid import verify_hardware_lock
+
+# Run hardware check before app boot
+verify_hardware_lock()
 
 # In dev mode this reads backend/.env as before. In the packaged .exe, the
 # working directory is unpredictable (wherever the user launched it from),
