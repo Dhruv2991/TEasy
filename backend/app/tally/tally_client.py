@@ -150,8 +150,11 @@ def fetch_ledgers(force_refresh: bool = False) -> list[dict]:
         raise TallyConnectionError(f"Could not fetch ledger list from Tally: {e}")
 
     ledgers = []
+    # Tally's XML sometimes contains stray control characters that break
+    # strict parsing — strip anything not valid in XML 1.0 before parsing.
+    clean_text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", resp.text)
     try:
-        root = ET.fromstring(resp.text)
+        root = ET.fromstring(clean_text)
         for led in root.iter("LEDGER"):
             name = led.get("NAME") or (led.findtext("NAME") or "")
             parent_el = led.find("PARENT")
@@ -159,9 +162,13 @@ def fetch_ledgers(force_refresh: bool = False) -> list[dict]:
             if name:
                 ledgers.append({"name": name.strip(), "parent": (parent or "").strip()})
     except ET.ParseError:
-        # Tally sometimes returns not-quite-well-formed XML (raw control
-        # chars etc.) — fall back to a regex scrape rather than failing hard.
-        for m in re.finditer(r'<LEDGER NAME="([^"]+)"[^>]*>.*?<PARENT>([^<]*)</PARENT>', resp.text, re.DOTALL):
+        # Fall back to a regex scrape rather than failing hard. PARENT may
+        # carry a TYPE="String" attribute, so don't assume a bare tag.
+        for m in re.finditer(
+            r'<LEDGER NAME="([^"]+)"[^>]*>.*?<PARENT[^>]*>([^<]*)</PARENT>',
+            clean_text,
+            re.DOTALL,
+        ):
             ledgers.append({"name": m.group(1).strip(), "parent": m.group(2).strip()})
 
     _LEDGER_CACHE["company"] = company

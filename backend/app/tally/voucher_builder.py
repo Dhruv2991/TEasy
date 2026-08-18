@@ -259,9 +259,11 @@ def build_voucher_envelope(tx: dict, config: dict) -> str:
     try:
         from .tally_client import fetch_ledgers
         ledgers = fetch_ledgers()
-    except Exception:
+    except Exception as e:
         # If the live fetch fails for any reason, fall back to the old
-        # manual-mapping-only behaviour rather than blocking the push.
+        # manual-mapping-only behaviour rather than blocking the push —
+        # but print it so it's visible in the console instead of silent.
+        print(f"[TEasy] Ledger auto-fetch failed, falling back to manual mapping: {e}")
         ledgers = []
 
     if tx["type"] == "PURCHASE":
