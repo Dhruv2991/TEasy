@@ -87,7 +87,7 @@ def push_approved_transactions(db: Session = Depends(get_db)):
             # all fail the same way, no point burning through every row.
             break
 
-        if result["errors"] or result["created"] == 0:
+        if result["errors"] or (result["created"] == 0 and result["altered"] == 0):
             tx.tally_status = "FAILED"
             tx.tally_error = result["error_message"] or "Tally did not create the voucher (unknown reason)."
             db.commit()
@@ -128,7 +128,7 @@ def push_single_transaction(transaction_id: int, db: Session = Depends(get_db)):
         _log(db, f"Tally push failed (connection): {e}", transaction_id=tx.id)
         return PushResult(transaction_id=tx.id, status="FAILED", message=str(e))
 
-    if result["errors"] or result["created"] == 0:
+    if result["errors"] or (result["created"] == 0 and result["altered"] == 0):
         tx.tally_status = "FAILED"
         tx.tally_error = result["error_message"] or "Tally did not create the voucher (unknown reason)."
         db.commit()

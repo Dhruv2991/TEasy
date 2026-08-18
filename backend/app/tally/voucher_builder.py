@@ -33,12 +33,16 @@ from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime
 
 
-def _tally_date(iso_date: str | None) -> str:
+def _tally_date(iso_date) -> str:
     """Tally wants dates as YYYYMMDD. Falls back to today if unparseable/missing."""
     if iso_date:
         try:
-            return datetime.fromisoformat(iso_date).strftime("%Y%m%d")
-        except ValueError:
+            if isinstance(iso_date, datetime):
+                return iso_date.strftime("%Y%m%d")
+            if hasattr(iso_date, "strftime"):  # datetime.date, pandas Timestamp, etc.
+                return iso_date.strftime("%Y%m%d")
+            return datetime.fromisoformat(str(iso_date)).strftime("%Y%m%d")
+        except (ValueError, TypeError):
             pass
     return datetime.utcnow().strftime("%Y%m%d")
 
@@ -82,7 +86,7 @@ def build_sales_voucher_xml(tx: dict, config: dict) -> str:
 
     return f"""
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
-          <VOUCHER VCHTYPE="Sales" ACTION="Create" OBJVIEW="Invoice Voucher View">
+          <VOUCHER VCHTYPE="Sales" ACTION="Create">
             <DATE>{date}</DATE>
             <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
             <PARTYLEDGERNAME>{xml_escape(party)}</PARTYLEDGERNAME>
@@ -113,7 +117,7 @@ def build_purchase_voucher_xml(tx: dict, config: dict) -> str:
 
     return f"""
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
-          <VOUCHER VCHTYPE="Purchase" ACTION="Create" OBJVIEW="Invoice Voucher View">
+          <VOUCHER VCHTYPE="Purchase" ACTION="Create">
             <DATE>{date}</DATE>
             <VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME>
             <PARTYLEDGERNAME>{xml_escape(party)}</PARTYLEDGERNAME>
