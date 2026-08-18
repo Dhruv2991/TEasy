@@ -178,7 +178,7 @@ def _process_document(document_id: int, db: Session):
             # avoids bursting through the free-tier tokens-per-minute limit
             # in the first place (the retry-with-backoff in groq_vision.py
             # is still there as a backstop if this isn't enough).
-            if idx > 0 and GROQ_API_KEY:
+            if idx > 0 and _groq_key():
                 time.sleep(2)
 
             crop_filename = f"{uuid.uuid4().hex}.jpg"
@@ -201,7 +201,7 @@ def _process_document(document_id: int, db: Session):
             db.commit()
             db.refresh(bill)
 
-            if GROQ_API_KEY:
+            if _groq_key():
                 # Primary path: Groq vision model reads the crop directly.
                 # Much stronger on handwriting than Tesseract + regex.
                 try:
@@ -275,7 +275,7 @@ def _process_document(document_id: int, db: Session):
             # No API key: do not run the old amount heuristics for handwritten
             # sales. A heuristic such as 'largest number = total' is exactly
             # the kind of silent guessing this accounting workflow must avoid.
-            if not GROQ_API_KEY:
+            if not _groq_key():
                 tx = models.Transaction(
                     bill_id=bill.id, type=doc.document_type, party="Cash",
                     date=None, invoice_number=None, taxable_value=0.0,
