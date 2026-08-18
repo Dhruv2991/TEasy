@@ -32,7 +32,7 @@ a = Analysis(
     ],
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
+    excludes=["matplotlib"],
     cipher=block_cipher,
 )
 
