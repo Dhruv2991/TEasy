@@ -5,6 +5,7 @@
 # yourself on another PC, or point a Windows installer tool like Inno Setup at)
 
 import os
+from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
 
@@ -13,12 +14,11 @@ block_cipher = None
 # exactly that folder name at runtime.
 FRONTEND_DIST = os.path.join("..", "frontend", "dist")
 
-a = Analysis(
-    ["launcher.py"],
-    pathex=[],
-    binaries=[],
-    datas=[(FRONTEND_DIST, "frontend_dist")],
-    hiddenimports=[
+# PyInstaller's static analysis sometimes misses these two because of how
+# they lazy-import internals — collect everything explicitly so this stops
+# recurring across rebuilds.
+HIDDEN_IMPORTS = (
+    [
         "uvicorn.logging",
         "uvicorn.loops",
         "uvicorn.loops.auto",
@@ -29,7 +29,17 @@ a = Analysis(
         "uvicorn.protocols.websockets.auto",
         "uvicorn.lifespan",
         "uvicorn.lifespan.on",
-    ],
+    ]
+    + collect_submodules("openpyxl")
+    + collect_submodules("pandas")
+)
+
+a = Analysis(
+    ["launcher.py"],
+    pathex=[],
+    binaries=[],
+    datas=[(FRONTEND_DIST, "frontend_dist")],
+    hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     runtime_hooks=[],
     excludes=["matplotlib"],
