@@ -3,6 +3,7 @@ import sys
 from dotenv import load_dotenv
 import sys
 from app.security.hwid import verify_hardware_lock
+from app.routers import bank
 
 # Run hardware check before app boot
 verify_hardware_lock()
@@ -47,7 +48,7 @@ app.include_router(gstr2b.router)
 app.include_router(tally.router)
 app.include_router(activity.router)
 app.include_router(settings_router.router)
-
+app.include_router(bank.router)
 
 @app.get("/api/status")
 def status():

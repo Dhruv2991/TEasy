@@ -12,11 +12,13 @@ import TallyIntegrationPage from "./TallyIntegrationPage.jsx";
 import ComingSoonPage from "./ComingSoonPage.jsx";
 import GeneralSettingsPage from "./GeneralSettingsPage.jsx";
 import FirstRunSetup from "./FirstRunSetup.jsx";
+import BankStatementPage from "./BankStatementPage.jsx";
 
 const PAGE_META = {
   dashboard: { title: "Dashboard", subtitle: "Welcome back" },
   documents: { title: "Documents", subtitle: "All uploaded documents" },
   transactions: { title: "Transactions", subtitle: "Every extracted transaction" },
+  bank: { title: "Bank Statements", subtitle: "Extract PDF bank statements and push to Tally" },
   tally: { title: "Tally Integration", subtitle: "Push approved transactions into Tally Prime" },
   reports: { title: "Reports", subtitle: "" },
   sales: { title: "Sales Bills", subtitle: "" },
@@ -82,6 +84,8 @@ export default function App() {
         return <AllDocumentsPage />;
       case "transactions":
         return <AllTransactionsPage />;
+      case "bank":
+        return <BankStatementPage />;
       case "tally":
         return <TallyIntegrationPage />;
       case "sales":

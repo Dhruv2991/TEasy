@@ -4,6 +4,7 @@ const MAIN_ITEMS = [
   { key: "dashboard", label: "Dashboard", icon: Icon.Dashboard },
   { key: "documents", label: "Documents", icon: Icon.Documents },
   { key: "transactions", label: "Transactions", icon: Icon.Transactions },
+  { key: "bank", label: "Bank Statements", icon: Icon.Documents },
   { key: "tally", label: "Tally Integration", icon: Icon.Tally },
   { key: "reports", label: "Reports", icon: Icon.Reports },
 ];

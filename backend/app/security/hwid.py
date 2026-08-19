@@ -3,7 +3,7 @@ import hashlib
 import sys
 
 # Target PC Hardware ID
-ALLOWED_HWID = "09651b874308888868fd196ad3ba305dd9f393581e2d5d7141337ff7216516c9"
+ALLOWED_HWID = "09651b874308888868fd196ad3ba305dd9f393581e2d5d7141337ff7216516c9,8726470c3d675662b883c670ff272e66d2cddf59af04ff092dfea920fa6d626c"
 
 def verify_hardware_lock():
     try:
@@ -14,7 +14,7 @@ def verify_hardware_lock():
         
         current_hwid = hashlib.sha256(raw_id.encode('utf-8')).hexdigest()
 
-        if current_hwid != ALLOWED_HWID:
+        if current_hwid not in ALLOWED_HWID.split(','):
             print("CRITICAL ERROR: Unauthorized Machine. Software is locked to another system.")
             sys.exit(1)
     except Exception:

@@ -37,15 +37,18 @@ export const api = {
     return req("/gstr2b/purchase-upload", { method: "POST", body: form });
   },
 
-  listTransactions: (status) => req(`/transactions${status ? `?status=${status}` : ""}`),
+  listTransactions: (status) =>
+    req(`/transactions${status ? `?status=${status}` : ""}`),
   updateTransaction: (id, payload) =>
     req(`/transactions/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }),
-  approveTransaction: (id) => req(`/transactions/${id}/approve`, { method: "POST" }),
-  rejectTransaction: (id) => req(`/transactions/${id}/reject`, { method: "POST" }),
+  approveTransaction: (id) =>
+    req(`/transactions/${id}/approve`, { method: "POST" }),
+  rejectTransaction: (id) =>
+    req(`/transactions/${id}/reject`, { method: "POST" }),
 
   getTallyStatus: () => req("/tally/status"),
   getTallyConfig: () => req("/tally/config"),
@@ -68,6 +71,19 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getSettingsStatus: () => req("/settings/status"),
+
+  uploadBankStatement: (file) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return req("/bank/upload", { method: "POST", body: formData });
+  },
+
+  pushBankToTally: (payload) =>
+    req("/bank/push-to-tally", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
 };
 
 export function cropImageUrl(cropPath) {
