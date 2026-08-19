@@ -1,5 +1,11 @@
 export const API_BASE = "http://localhost:8000";
 
+function _qs(params) {
+  const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "");
+  if (!entries.length) return "";
+  return "?" + entries.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+}
+
 async function req(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, options);
   if (!res.ok) {
@@ -50,6 +56,26 @@ export const api = {
   rejectTransaction: (id) =>
     req(`/transactions/${id}/reject`, { method: "POST" }),
 
+  // --- Bulk Actions ---
+  bulkApproveTransactions: (ids) =>
+    req("/transactions/bulk-approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }),
+  bulkRejectTransactions: (ids) =>
+    req("/transactions/bulk-reject", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }),
+  bulkDeleteTransactions: (ids) =>
+    req("/transactions/bulk-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }),
+
   getTallyStatus: () => req("/tally/status"),
   getTallyConfig: () => req("/tally/config"),
   updateTallyConfig: (config) =>
@@ -77,6 +103,15 @@ export const api = {
     formData.append("file", file);
     return req("/bank/upload", { method: "POST", body: formData });
   },
+
+  getReportSummary: (params = {}) =>
+    req(`/reports/summary${_qs(params)}`),
+  getReportByMonth: (params = {}) =>
+    req(`/reports/by-month${_qs(params)}`),
+  getReportByParty: (params = {}) =>
+    req(`/reports/by-party${_qs(params)}`),
+  getReportByGstRate: (params = {}) =>
+    req(`/reports/by-gst-rate${_qs(params)}`),
 
   pushBankToTally: (payload) =>
     req("/bank/push-to-tally", {

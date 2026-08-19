@@ -10,6 +10,8 @@ import ReviewApprovePage from "./ReviewApprovePage.jsx";
 import PendingIssuesPage from "./PendingIssuesPage.jsx";
 import TallyIntegrationPage from "./TallyIntegrationPage.jsx";
 import ComingSoonPage from "./ComingSoonPage.jsx";
+import ReportsPage from "./ReportsPage.jsx";
+import GstSettingsPage from "./GstSettingsPage.jsx";
 import GeneralSettingsPage from "./GeneralSettingsPage.jsx";
 import FirstRunSetup from "./FirstRunSetup.jsx";
 import BankStatementPage from "./BankStatementPage.jsx";
@@ -97,11 +99,11 @@ export default function App() {
       case "issues":
         return <PendingIssuesPage />;
       case "reports":
-        return <ComingSoonPage title="Reports" description="Sales/purchase/GST summary reports are on the roadmap — for now, use Tally's own reports once vouchers are pushed." />;
+        return <ReportsPage />;
       case "parties":
         return <ComingSoonPage title="Parties & Ledgers" description="Fuzzy ledger-name matching against your Tally ledgers isn't built yet — for now, party names must match exactly for a successful Tally push." />;
       case "gst-settings":
-        return <ComingSoonPage title="GST Settings" description="Company GSTIN, state code, and default tax rate settings are on the roadmap." />;
+        return <GstSettingsPage />;
       case "users":
         return <ComingSoonPage title="Users" description="This is currently a single-user local app — multi-user accounts aren't built yet." />;
       case "general-settings":

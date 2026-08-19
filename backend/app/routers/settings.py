@@ -29,6 +29,10 @@ def update_settings(update: dict):
         "groq_api_key_set": bool(saved.get("groq_api_key")),
         "tally_host": saved.get("tally_host"),
         "tally_port": saved.get("tally_port"),
+        "company_name": saved.get("company_name"),
+        "gstin": saved.get("gstin"),
+        "state_code": saved.get("state_code"),
+        "default_gst_rate": saved.get("default_gst_rate"),
     }
 
 

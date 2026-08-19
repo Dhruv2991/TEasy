@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .database import engine, Base, run_lightweight_migrations
-from .routers import documents, transactions, gstr2b, tally, activity, settings as settings_router
+from .routers import documents, transactions, gstr2b, tally, activity, settings as settings_router, reports
 from .paths import get_data_dir, get_frontend_dir
 
 Base.metadata.create_all(bind=engine)
@@ -49,6 +49,7 @@ app.include_router(tally.router)
 app.include_router(activity.router)
 app.include_router(settings_router.router)
 app.include_router(bank.router)
+app.include_router(reports.router)
 
 @app.get("/api/status")
 def status():

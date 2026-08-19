@@ -15,6 +15,14 @@ DEFAULTS = {
     "groq_vision_model": "",  # empty = use the built-in default
     "tally_host": "localhost",
     "tally_port": 9000,
+    # Company GST profile — used to pre-fill vouchers and, later, for
+    # in-app GST reports. Purely informational at this stage: nothing in
+    # the OCR/Tally push pipeline reads these yet, so saving them cannot
+    # affect any existing flow.
+    "company_name": "",
+    "gstin": "",
+    "state_code": "",
+    "default_gst_rate": 18.0,
 }
 
 
