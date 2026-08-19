@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { api } from "./api.js";
-import { StatCard } from "./ui.jsx";
+import { StatCard, formatMoney } from "./ui.jsx";
 import { Icon } from "./icons.jsx";
 
 const DOC_TYPES = [
@@ -10,8 +10,7 @@ const DOC_TYPES = [
   { value: "GSTR2B", label: "GSTR-2B" },
 ];
 
-const money = (n) =>
-  "₹" + (n ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+const money = (n) => "₹" + formatMoney(n);
 
 export default function ReportsPage() {
   const [docType, setDocType] = useState("");

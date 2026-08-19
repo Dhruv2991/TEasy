@@ -1,5 +1,13 @@
 import { Icon } from "./icons.jsx";
 
+// Always renders as ₹X,XXX.XX — exactly two decimal places, every time.
+// Used everywhere a rupee amount is shown so Sales, Purchase, GSTR-2B
+// discount notes, Bank Statements, and Reports all match the same format.
+export function formatMoney(value) {
+  const n = Number(value) || 0;
+  return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 export function StatCard({ icon: IconComp, color, label, value, sublabel }) {
   const colorMap = {
     green: "bg-emerald-50 text-emerald-600",

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { api } from "./api.js";
-import { StatCard, StatusBadge } from "./ui.jsx";
+import { StatCard, StatusBadge, formatMoney } from "./ui.jsx";
 import { Icon } from "./icons.jsx";
 import UploadBox from "./UploadBox.jsx";
 
@@ -75,10 +75,10 @@ export default function DashboardPage({ onNavigate }) {
   return (
     <div className="p-6 space-y-6">
       <div className="flex flex-wrap gap-4">
-        <StatCard icon={Icon.Sales} color="green" label="Sales Vouchers" value={sales.length} sublabel={`₹${sumTotal(sales).toLocaleString("en-IN")}`} />
-        <StatCard icon={Icon.Purchase} color="orange" label="Purchase Vouchers" value={purchase.length} sublabel={`₹${sumTotal(purchase).toLocaleString("en-IN")}`} />
-        <StatCard icon={Icon.Gstr2b} color="purple" label="Debit / Credit Notes" value={debitNotes.length} sublabel={`₹${sumTotal(debitNotes).toLocaleString("en-IN")}`} />
-        <StatCard icon={Icon.Transactions} color="blue" label="Total Transactions" value={transactions.length} sublabel={`₹${sumTotal(transactions).toLocaleString("en-IN")}`} />
+        <StatCard icon={Icon.Sales} color="green" label="Sales Vouchers" value={sales.length} sublabel={`₹${formatMoney(sumTotal(sales))}`} />
+        <StatCard icon={Icon.Purchase} color="orange" label="Purchase Vouchers" value={purchase.length} sublabel={`₹${formatMoney(sumTotal(purchase))}`} />
+        <StatCard icon={Icon.Gstr2b} color="purple" label="Debit / Credit Notes" value={debitNotes.length} sublabel={`₹${formatMoney(sumTotal(debitNotes))}`} />
+        <StatCard icon={Icon.Transactions} color="blue" label="Total Transactions" value={transactions.length} sublabel={`₹${formatMoney(sumTotal(transactions))}`} />
         <StatCard icon={Icon.Alert} color="amber" label="Pending Review" value={pendingReview} sublabel="Requires your action" />
       </div>
 

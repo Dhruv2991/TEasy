@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from dateutil import parser as dateparser
 
+from ..money import round_rupee
+
 
 AMOUNT_RE = re.compile(r"(?:rs\.?|inr|₹)?\s*([0-9][0-9,]*\.?[0-9]{0,2})", re.IGNORECASE)
 GST_RATE_RE = re.compile(r"(\d{1,2})\s*%\s*(gst|cgst|sgst|igst)?", re.IGNORECASE)
@@ -92,7 +94,7 @@ def extract_sales_transaction(raw_text: str, ocr_confidence: float) -> Extracted
         # Heuristic: largest amount on a handwritten sales bill is almost
         # always the bill total. This is the #1 thing a human should verify.
         total = max(amounts)
-        tx.total_value = round(total, 2)
+        tx.total_value = round_rupee(total)
 
         if gst_rate > 0:
             taxable = round(total / (1 + gst_rate / 100), 2)

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "./api.js";
+import { formatMoney } from "./ui.jsx";
 
 export default function BankStatementPage() {
   const [loading, setLoading] = useState(false);
@@ -105,13 +106,13 @@ export default function BankStatementPage() {
                     <td className="p-2">{tx.cheque_no || "-"}</td>
                     <td className="p-2">{tx.branch_code || "-"}</td>
                     <td className="p-2 text-right text-rose-600 font-medium">
-                      {tx.debit > 0 ? tx.debit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "-"}
+                      {tx.debit > 0 ? formatMoney(tx.debit) : "-"}
                     </td>
                     <td className="p-2 text-right text-emerald-600 font-medium">
-                      {tx.credit > 0 ? tx.credit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "-"}
+                      {tx.credit > 0 ? formatMoney(tx.credit) : "-"}
                     </td>
                     <td className={`p-2 text-right font-medium ${tx.balance < 0 ? "text-rose-500" : "text-slate-700"}`}>
-                      {tx.balance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                      {formatMoney(tx.balance)}
                     </td>
                   </tr>
                 ))}

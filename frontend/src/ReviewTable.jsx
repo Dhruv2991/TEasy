@@ -1,10 +1,17 @@
 import { useState, useEffect } from "react";
 import { api, cropImageUrl } from "./api.js";
-import { StatusBadge, ConfidenceBadge } from "./ui.jsx";
+import { StatusBadge, ConfidenceBadge, formatMoney } from "./ui.jsx";
 import { Icon } from "./icons.jsx";
 
 function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+// The Total is what actually gets saved/pushed to Tally — GST rules expect
+// it rounded off to the nearest whole rupee, so we force it to an integer
+// here (not just at display time via formatMoney).
+function roundRupee(n) {
+  return Math.round(Number(n) || 0);
 }
 
 function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
@@ -42,7 +49,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
     const next = wasInterState
       ? { igst: round2(taxAmount), cgst: 0, sgst: 0 }
       : { cgst: round2(taxAmount / 2), sgst: round2(taxAmount / 2), igst: 0 };
-    const total = round2((Number(taxable) || 0) + taxAmount);
+    const total = roundRupee((Number(taxable) || 0) + taxAmount);
     return { ...next, total_value: total };
   };
 
@@ -84,7 +91,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
   const img = cropImageUrl(bill.crop_path);
 
   const taxSum = (Number(form.cgst) || 0) + (Number(form.sgst) || 0) + (Number(form.igst) || 0);
-  const computedTotal = round2((Number(form.taxable_value) || 0) + taxSum);
+  const computedTotal = roundRupee((Number(form.taxable_value) || 0) + taxSum);
   const reconciled = Math.abs(computedTotal - (Number(form.total_value) || 0)) <= 1.5;
 
   return (
@@ -159,10 +166,10 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
               onChange={(e) => handleRateChange(e.target.value)}
             />
             <div className="text-sm font-medium text-slate-900 mt-1">
-              ₹{computedTotal.toLocaleString("en-IN")}
+              ₹{formatMoney(computedTotal)}
             </div>
             <div className={`text-[10px] ${reconciled ? "text-emerald-600" : "text-rose-600"}`}>
-              {reconciled ? "Balances ✓" : `≠ saved total (₹${Number(form.total_value ?? 0).toLocaleString("en-IN")})`}
+              {reconciled ? "Balances ✓" : `≠ saved total (₹${formatMoney(form.total_value)})`}
             </div>
           </td>
         </>
@@ -179,7 +186,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             )}
           </td>
           <td className="p-3 text-sm font-medium text-slate-900">
-            ₹{Number(tx.total_value).toLocaleString("en-IN")}
+            ₹{formatMoney(tx.total_value)}
           </td>
           <td className="p-3 text-sm text-slate-600">{tx.gst_rate}%</td>
         </>

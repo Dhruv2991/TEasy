@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from dateutil import parser as dateparser
 
 from .sales_extractor import AMOUNT_RE, GST_RATE_RE, DATE_RE, INVOICE_RE
+from ..money import round_rupee
 
 
 @dataclass
@@ -113,7 +114,7 @@ def extract_purchase_transaction(raw_text: str, ocr_confidence: float) -> Extrac
 
     if amounts:
         total = max(amounts)
-        tx.total_value = round(total, 2)
+        tx.total_value = round_rupee(total)
         if gst_rate > 0:
             taxable = round(total / (1 + gst_rate / 100), 2)
             gst_amount = round(total - taxable, 2)

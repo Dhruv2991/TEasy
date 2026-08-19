@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from .. import models, schemas
+from ..money import round_rupee
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
@@ -75,6 +76,8 @@ def update_transaction(
         raise HTTPException(404, "Transaction not found")
 
     for field_name, value in payload.dict(exclude_unset=True).items():
+        if field_name == "total_value":
+            value = round_rupee(value)
         setattr(tx, field_name, value)
 
     # Re-check duplicate status
