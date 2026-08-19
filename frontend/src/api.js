@@ -76,8 +76,18 @@ export const api = {
       body: JSON.stringify({ ids }),
     }),
 
+  listParties: () => req("/transactions/parties"),
+  renameParty: (oldName, newName, docType) =>
+    req("/transactions/rename-party", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ old_name: oldName, new_name: newName, doc_type: docType || null }),
+    }),
+
   getTallyStatus: () => req("/tally/status"),
   getTallyConfig: () => req("/tally/config"),
+  getTallyLedgers: (forceRefresh = false) =>
+    req(`/tally/ledgers${forceRefresh ? "?force_refresh=true" : ""}`),
   updateTallyConfig: (config) =>
     req("/tally/config", {
       method: "PUT",

@@ -3,6 +3,10 @@ import { api, cropImageUrl } from "./api.js";
 import { StatusBadge, ConfidenceBadge } from "./ui.jsx";
 import { Icon } from "./icons.jsx";
 
+function round2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
 function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
   const tx = bill.transaction;
   const [editing, setEditing] = useState(false);
@@ -26,6 +30,30 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
   const cancelEdit = () => {
     setForm({ ...tx });
     setEditing(false);
+  };
+
+  // Recompute the tax split whenever taxable value or GST rate change,
+  // keeping the existing intra-state (CGST+SGST) vs inter-state (IGST)
+  // shape of whatever this transaction already had — we don't decide that
+  // here, we just re-split the same way it was split before.
+  const recalcFromTaxableAndRate = (taxable, rate) => {
+    const taxAmount = (Number(taxable) || 0) * (Number(rate) || 0) / 100;
+    const wasInterState = (Number(form.igst) || 0) > 0;
+    const next = wasInterState
+      ? { igst: round2(taxAmount), cgst: 0, sgst: 0 }
+      : { cgst: round2(taxAmount / 2), sgst: round2(taxAmount / 2), igst: 0 };
+    const total = round2((Number(taxable) || 0) + taxAmount);
+    return { ...next, total_value: total };
+  };
+
+  const handleTaxableChange = (value) => {
+    const taxable = parseFloat(value) || 0;
+    setForm((f) => ({ ...f, taxable_value: taxable, ...recalcFromTaxableAndRate(taxable, f.gst_rate) }));
+  };
+
+  const handleRateChange = (value) => {
+    const rate = parseFloat(value) || 0;
+    setForm((f) => ({ ...f, gst_rate: rate, ...recalcFromTaxableAndRate(f.taxable_value, rate) }));
   };
 
   const save = async () => {
@@ -54,6 +82,10 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
   };
 
   const img = cropImageUrl(bill.crop_path);
+
+  const taxSum = (Number(form.cgst) || 0) + (Number(form.sgst) || 0) + (Number(form.igst) || 0);
+  const computedTotal = round2((Number(form.taxable_value) || 0) + taxSum);
+  const reconciled = Math.abs(computedTotal - (Number(form.total_value) || 0)) <= 1.5;
 
   return (
     <tr className="border-b border-slate-100 hover:bg-slate-50/60">
@@ -110,30 +142,28 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             />
           </td>
           <td className="p-3">
+            <div className="text-[10px] text-slate-400 mb-0.5">Taxable value</div>
             <input
               type="number"
               className="border border-slate-300 rounded px-2 py-1 text-sm w-24"
-              value={form.total_value ?? 0}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  total_value: parseFloat(e.target.value) || 0,
-                })
-              }
+              value={form.taxable_value ?? 0}
+              onChange={(e) => handleTaxableChange(e.target.value)}
             />
           </td>
           <td className="p-3">
+            <div className="text-[10px] text-slate-400 mb-0.5">GST % → Total</div>
             <input
               type="number"
               className="border border-slate-300 rounded px-2 py-1 text-sm w-16"
               value={form.gst_rate ?? 0}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  gst_rate: parseFloat(e.target.value) || 0,
-                })
-              }
+              onChange={(e) => handleRateChange(e.target.value)}
             />
+            <div className="text-sm font-medium text-slate-900 mt-1">
+              ₹{computedTotal.toLocaleString("en-IN")}
+            </div>
+            <div className={`text-[10px] ${reconciled ? "text-emerald-600" : "text-rose-600"}`}>
+              {reconciled ? "Balances ✓" : `≠ saved total (₹${Number(form.total_value ?? 0).toLocaleString("en-IN")})`}
+            </div>
           </td>
         </>
       ) : (
@@ -177,9 +207,10 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
         {editing ? (
           <div className="flex gap-1.5">
             <button
-              disabled={busy}
+              disabled={busy || !reconciled}
               onClick={save}
-              className="text-xs bg-slate-900 text-white px-2.5 py-1 rounded-md"
+              title={!reconciled ? "Taxable + GST must equal Total before saving" : ""}
+              className="text-xs bg-slate-900 text-white px-2.5 py-1 rounded-md disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Save
             </button>

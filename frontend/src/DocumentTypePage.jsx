@@ -43,7 +43,12 @@ export default function DocumentTypePage({ pageKey }) {
       <div className="bg-white rounded-xl border border-slate-200 p-5">
         <h2 className="font-semibold text-slate-900 mb-1">{cfg.label}</h2>
         <p className="text-sm text-slate-500 mb-4">{cfg.uploadLabel}</p>
-        <UploadBox accept={cfg.accept} label={cfg.uploadLabel} onUpload={handleUpload} />
+        <UploadBox
+          accept={cfg.accept}
+          label={cfg.uploadLabel}
+          onUpload={handleUpload}
+          multiple={pageKey === "sales"}
+        />
       </div>
 
       {failedDocs.length > 0 && (

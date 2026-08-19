@@ -232,3 +232,87 @@ def bulk_delete_transactions(
 
     db.commit()
     return {"status": "success", "deleted_count": deleted_count}
+
+
+# ------------------------------------------------------------------
+# PARTIES & LEDGERS
+#
+# This does NOT touch the Tally push flow (routers/tally.py, voucher_builder,
+# tally_client) at all. It only helps clean up the free-text `party` field
+# on transactions *before* a push is attempted, since Tally requires an
+# exact ledger-name match. Renaming here just updates existing rows —
+# same mechanism as editing a transaction via PATCH, applied in bulk.
+# ------------------------------------------------------------------
+
+
+class RenamePartyRequest(BaseModel):
+    old_name: str
+    new_name: str
+    doc_type: str | None = None  # optional: only rename within SALES/PURCHASE/GSTR2B
+
+
+@router.get("/parties")
+def list_parties(db: Session = Depends(get_db)):
+    """
+    Distinct party names currently used across transactions, with counts —
+    read-only, used to build a party cleanup / ledger-matching view.
+    """
+    rows = (
+        db.query(models.Transaction.party, models.Transaction.type, models.Transaction.tally_status)
+        .filter(models.Transaction.status != "REJECTED")
+        .all()
+    )
+    buckets: dict[str, dict] = {}
+    for party, tx_type, tally_status in rows:
+        name = party or "Cash"
+        b = buckets.setdefault(name, {"party": name, "count": 0, "sent_to_tally": 0, "types": set()})
+        b["count"] += 1
+        b["types"].add(tx_type)
+        if tally_status == "SENT":
+            b["sent_to_tally"] += 1
+    result = []
+    for b in buckets.values():
+        result.append({
+            "party": b["party"],
+            "count": b["count"],
+            "sent_to_tally": b["sent_to_tally"],
+            "types": sorted(b["types"]),
+        })
+    result.sort(key=lambda r: r["count"], reverse=True)
+    return result
+
+
+@router.post("/rename-party")
+def rename_party(payload: RenamePartyRequest, db: Session = Depends(get_db)):
+    """
+    Renames every transaction currently using `old_name` to `new_name`
+    (e.g. matching a fuzzy-matched name to the exact Tally ledger name).
+    Transactions already SENT to Tally are left untouched — that voucher
+    was already posted under the old name, renaming it here wouldn't
+    change what's in Tally and could be confusing in the audit trail.
+    """
+    if not payload.old_name.strip() or not payload.new_name.strip():
+        raise HTTPException(400, "Both old_name and new_name are required")
+
+    q = db.query(models.Transaction).filter(
+        models.Transaction.party == payload.old_name,
+        models.Transaction.tally_status != "SENT",
+    )
+    if payload.doc_type:
+        q = q.filter(models.Transaction.type == payload.doc_type.upper())
+
+    txs = q.all()
+    updated_ids = []
+    for tx in txs:
+        tx.party = payload.new_name.strip()
+        tx.possible_duplicate = _is_duplicate_invoice(
+            db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id
+        )
+        db.add(models.AuditLog(
+            transaction_id=tx.id,
+            message=f"Party renamed from '{payload.old_name}' to '{payload.new_name}' via Parties & Ledgers",
+        ))
+        updated_ids.append(tx.id)
+
+    db.commit()
+    return {"status": "success", "updated_count": len(updated_ids), "updated_ids": updated_ids}

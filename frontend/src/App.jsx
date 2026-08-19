@@ -12,6 +12,7 @@ import TallyIntegrationPage from "./TallyIntegrationPage.jsx";
 import ComingSoonPage from "./ComingSoonPage.jsx";
 import ReportsPage from "./ReportsPage.jsx";
 import GstSettingsPage from "./GstSettingsPage.jsx";
+import PartiesPage from "./PartiesPage.jsx";
 import GeneralSettingsPage from "./GeneralSettingsPage.jsx";
 import FirstRunSetup from "./FirstRunSetup.jsx";
 import BankStatementPage from "./BankStatementPage.jsx";
@@ -101,7 +102,7 @@ export default function App() {
       case "reports":
         return <ReportsPage />;
       case "parties":
-        return <ComingSoonPage title="Parties & Ledgers" description="Fuzzy ledger-name matching against your Tally ledgers isn't built yet — for now, party names must match exactly for a successful Tally push." />;
+        return <PartiesPage />;
       case "gst-settings":
         return <GstSettingsPage />;
       case "users":
