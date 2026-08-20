@@ -5,7 +5,7 @@ Sends XML to Tally Prime's built-in HTTP/XML server and parses responses.
 import re
 import time
 from xml.etree import ElementTree as ET
-from xml.sax.saxutils import escape as xml_escape, unescape as xml_unescape
+from xml.sax.saxutils import escape as xml_escape
 import requests
 
 from ..settings import get_settings
@@ -58,10 +58,7 @@ def send_voucher_xml(xml: str) -> dict:
     error_message = None
     line_error_match = re.search(r"<LINEERROR>(.*?)</LINEERROR>", text, re.DOTALL | re.IGNORECASE)
     if line_error_match:
-        # Tally's response is XML, so any apostrophes/quotes/ampersands in
-        # the message come back as &apos;/&quot;/&amp; — decode them, or
-        # the user sees literal "&apos;Purchase&apos;" instead of 'Purchase'.
-        error_message = xml_unescape(line_error_match.group(1).strip(), {"&apos;": "'", "&quot;": '"'})
+        error_message = line_error_match.group(1).strip()
     elif errors and errors > 0:
         error_message = "Tally reported an error during voucher import but did not specify details."
 

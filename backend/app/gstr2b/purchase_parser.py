@@ -7,7 +7,6 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 import openpyxl
-from dateutil import parser as dateparser
 
 
 def _normalize(text) -> str:
@@ -48,20 +47,12 @@ def _date(value):
     if isinstance(value, datetime):
         return value.date().isoformat()
     text = str(value).strip()
-    if not text:
-        return None
     for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d-%b-%Y", "%Y-%m-%d"):
         try:
             return datetime.strptime(text, fmt).date().isoformat()
         except ValueError:
             pass
-    # GSTR-2B exports vary (2-digit years, "1 Apr 2026", Excel serial dates
-    # read as plain numbers, etc.) — fall back to a fuzzy parser before
-    # giving up entirely. dayfirst=True since these are Indian invoices.
-    try:
-        return dateparser.parse(text, dayfirst=True, fuzzy=True).date().isoformat()
-    except (ValueError, OverflowError, TypeError):
-        return None
+    return None
 
 
 @dataclass

@@ -104,8 +104,9 @@ def push_approved_transactions(
             "total_value": tx.total_value,
             "gst_rate": getattr(tx, "gst_rate", 0.0),
         }
+        xml = build_voucher_envelope(tx_dict, config)
+
         try:
-            xml = build_voucher_envelope(tx_dict, config)
             result = send_voucher_xml(xml)
         except TallyConnectionError as e:
             tx.tally_status = "FAILED"
@@ -176,8 +177,9 @@ def push_single_transaction(transaction_id: int, db: Session = Depends(get_db)):
         "total_value": tx.total_value,
         "gst_rate": getattr(tx, "gst_rate", 0.0),
     }
+    xml = build_voucher_envelope(tx_dict, config)
+
     try:
-        xml = build_voucher_envelope(tx_dict, config)
         result = send_voucher_xml(xml)
     except TallyConnectionError as e:
         tx.tally_status = "FAILED"

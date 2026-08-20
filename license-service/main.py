@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 
 load_dotenv()
 
+import mailer
 import models
 from database import Base, engine, get_db
 
@@ -131,11 +132,17 @@ def start_trial(body: TrialStartRequest, db: Session = Depends(get_db)):
         if existing:
             # Re-issuing the same license_key for a known email prevents
             # someone from farming infinite trials with the same address,
-            # while still letting a legit user recover a lost key.
+            # while still letting a legit user recover a lost key. Email it
+            # to them instead of just handing it back in the API response,
+            # since the whole point is they may not have it handy anymore.
+            mailer.send_already_registered(
+                email, existing.license_key, existing.status, _expiry_for(existing)
+            )
             return {
                 "license_key": existing.license_key,
                 "status": existing.status,
                 "expires_at": _expiry_for(existing),
+                "is_new": False,
             }
     else:
         user = models.User(email=email)
@@ -151,7 +158,14 @@ def start_trial(body: TrialStartRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(lic)
 
-    return {"license_key": lic.license_key, "status": lic.status, "expires_at": lic.trial_ends_at}
+    mailer.send_trial_welcome(email, lic.license_key, TRIAL_DAYS, lic.trial_ends_at)
+
+    return {
+        "license_key": lic.license_key,
+        "status": lic.status,
+        "expires_at": lic.trial_ends_at,
+        "is_new": True,
+    }
 
 
 @app.post("/license/check")
