@@ -21,7 +21,7 @@ import requests
 
 from ..paths import get_data_dir
 
-LICENSE_SERVICE_URL = os.environ.get("TEASY_LICENSE_SERVICE_URL", "https://license.teasy.app")
+LICENSE_SERVICE_URL = os.environ.get("TEASY_LICENSE_SERVICE_URL", "https://teasy-vusw.onrender.com")
 GRACE_DAYS = int(os.environ.get("TEASY_LICENSE_GRACE_DAYS", "5"))
 REQUEST_TIMEOUT = 5
 
