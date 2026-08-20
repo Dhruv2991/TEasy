@@ -19,19 +19,7 @@ def _is_duplicate_invoice(
     party: str,
     invoice_number: str | None,
     exclude_tx_id: int | None = None,
-    taxable_value: float | None = None,
 ) -> bool:
-    """
-    True if this looks like the same invoice already recorded.
-
-    A single real invoice can legitimately appear as several rows/lines when
-    it has items taxed at more than one GST rate (the GSTR-2B B2B export
-    splits a multi-rate bill into one row per rate). Those rows share the
-    same party + invoice number but have different taxable values, so
-    matching on taxable_value too (in addition to party + invoice number)
-    keeps that case from being flagged as a false "possible duplicate" while
-    still catching a genuine re-upload of the exact same invoice/line.
-    """
     if not invoice_number or not invoice_number.strip():
         return False
     query = db.query(models.Transaction).filter(
@@ -40,12 +28,6 @@ def _is_duplicate_invoice(
         models.Transaction.invoice_number == invoice_number,
         models.Transaction.status != "REJECTED",
     )
-    if taxable_value is not None:
-        # Small tolerance for float/rounding noise, not for genuinely
-        # different rate-lines (those differ by far more than a rupee).
-        query = query.filter(
-            models.Transaction.taxable_value.between(taxable_value - 1.0, taxable_value + 1.0)
-        )
     if exclude_tx_id:
         query = query.filter(models.Transaction.id != exclude_tx_id)
     return db.query(query.exists()).scalar()
@@ -100,7 +82,7 @@ def update_transaction(
 
     # Re-check duplicate status
     tx.possible_duplicate = _is_duplicate_invoice(
-        db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id, taxable_value=tx.taxable_value
+        db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id
     )
 
     db.add(
@@ -327,7 +309,7 @@ def rename_party(payload: RenamePartyRequest, db: Session = Depends(get_db)):
     for tx in txs:
         tx.party = payload.new_name.strip()
         tx.possible_duplicate = _is_duplicate_invoice(
-            db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id, taxable_value=tx.taxable_value
+            db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id
         )
         db.add(models.AuditLog(
             transaction_id=tx.id,

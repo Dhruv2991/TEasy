@@ -112,13 +112,9 @@ def upload_gstr2b(file: UploadFile = File(...), db: Session = Depends(get_db)):
         # sitting in the DB (e.g. imported before, or added via photo/manual
         # entry), or the same invoice appearing twice within this very Excel
         # file (GST portal exports occasionally repeat rows across sheets).
-        # taxable_value is included in the key/check too: a single note can
-        # legitimately span more than one GST rate and appear as more than
-        # one row sharing the same note number — those are different lines,
-        # not duplicates.
-        batch_key = (tx_type, row.supplier_name, row.note_number, round(row.taxable_value, 0))
+        batch_key = (tx_type, row.supplier_name, row.note_number)
         in_batch_dupe = row.note_number and batch_key in seen_in_batch
-        in_db_dupe = _is_duplicate_invoice(db, tx_type, row.supplier_name, row.note_number, exclude_tx_id=tx.id, taxable_value=row.taxable_value)
+        in_db_dupe = _is_duplicate_invoice(db, tx_type, row.supplier_name, row.note_number, exclude_tx_id=tx.id)
         tx.possible_duplicate = bool(in_batch_dupe or in_db_dupe)
         if row.note_number:
             seen_in_batch.add(batch_key)
@@ -216,13 +212,9 @@ def upload_gstr2b_purchase(file: UploadFile = File(...), db: Session = Depends(g
         db.commit()
         db.refresh(tx)
 
-        # taxable_value is part of the key/check too: a purchase invoice with
-        # items at more than one GST rate is exported by the GST portal as
-        # multiple rows sharing the same invoice number (one row per rate) —
-        # those are legitimate separate lines of one bill, not duplicates.
-        batch_key = ("PURCHASE", row.supplier_name, row.invoice_number, round(row.taxable_value, 0))
+        batch_key = ("PURCHASE", row.supplier_name, row.invoice_number)
         in_batch_dupe = row.invoice_number and batch_key in seen_in_batch
-        in_db_dupe = _is_duplicate_invoice(db, "PURCHASE", row.supplier_name, row.invoice_number, exclude_tx_id=tx.id, taxable_value=row.taxable_value)
+        in_db_dupe = _is_duplicate_invoice(db, "PURCHASE", row.supplier_name, row.invoice_number, exclude_tx_id=tx.id)
         tx.possible_duplicate = bool(in_batch_dupe or in_db_dupe)
         if row.invoice_number:
             seen_in_batch.add(batch_key)
@@ -323,9 +315,9 @@ def upload_sales_excel(file: UploadFile = File(...), db: Session = Depends(get_d
         db.commit()
         db.refresh(tx)
 
-        batch_key = ("SALES", row.party, row.invoice_number, round(row.taxable_value, 0))
+        batch_key = ("SALES", row.party, row.invoice_number)
         in_batch_dupe = row.invoice_number and batch_key in seen_in_batch
-        in_db_dupe = _is_duplicate_invoice(db, "SALES", row.party, row.invoice_number, exclude_tx_id=tx.id, taxable_value=row.taxable_value)
+        in_db_dupe = _is_duplicate_invoice(db, "SALES", row.party, row.invoice_number, exclude_tx_id=tx.id)
         tx.possible_duplicate = bool(in_batch_dupe or in_db_dupe)
         if row.invoice_number:
             seen_in_batch.add(batch_key)

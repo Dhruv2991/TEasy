@@ -19,7 +19,6 @@ export default function LicenseGate({ license, onRecheck }) {
   const [licenseKey, setLicenseKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
 
   const expiredTrial = license?.status === "trial" || license?.status === "expired" || license?.status === "cancelled";
 
@@ -27,18 +26,8 @@ export default function LicenseGate({ license, onRecheck }) {
     if (!email.trim()) return setError("Enter your email to start the trial.");
     setBusy(true);
     setError("");
-    setNotice("");
     try {
-      const result = await api.startTrial(email.trim());
-      if (result?.is_new === false) {
-        // This email already has a trial or license on file — don't
-        // silently activate it here. We've emailed them the key instead.
-        setNotice(
-          "You already started a trial with this email. We've sent your license key to your inbox — activate it from the \"Activate key\" tab."
-        );
-        setBusy(false);
-        return;
-      }
+      await api.startTrial(email.trim());
       onRecheck();
     } catch (e) {
       setError(e.message || "Couldn't start the trial.");
@@ -141,20 +130,6 @@ export default function LicenseGate({ license, onRecheck }) {
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-1"
                 />
                 {error && <p className="text-xs text-rose-600 mb-2">{error}</p>}
-                {notice && (
-                  <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-2">
-                    {notice}{" "}
-                    <button
-                      onClick={() => {
-                        setNotice("");
-                        setTab("activate");
-                      }}
-                      className="underline font-medium"
-                    >
-                      Go to Activate key
-                    </button>
-                  </div>
-                )}
                 <button
                   onClick={startTrial}
                   disabled={busy}

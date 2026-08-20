@@ -31,17 +31,12 @@ def _log(db: Session, message: str, document_id: int | None = None, transaction_
     db.commit()
 
 
-def _is_duplicate_invoice(db: Session, doc_type: str, party: str, invoice_number: str | None, exclude_tx_id: int | None = None, taxable_value: float | None = None) -> bool:
+def _is_duplicate_invoice(db: Session, doc_type: str, party: str, invoice_number: str | None, exclude_tx_id: int | None = None) -> bool:
     """
     True if another APPROVED-or-pending transaction of the same type+party
     already has this exact invoice_number. A blank/null invoice_number is
     never flagged (too common — e.g. cash sales usually have no number, and
     flagging every one of those as a "duplicate" would be pure noise).
-
-    When taxable_value is given, it's matched too (within a small rounding
-    tolerance) so that a genuine multi-GST-rate invoice — which can appear
-    as more than one line/transaction sharing the same invoice number — is
-    not mistaken for a duplicate.
     """
     if not invoice_number or not invoice_number.strip():
         return False
@@ -54,10 +49,6 @@ def _is_duplicate_invoice(db: Session, doc_type: str, party: str, invoice_number
             models.Transaction.status != "REJECTED",
         )
     )
-    if taxable_value is not None:
-        query = query.filter(
-            models.Transaction.taxable_value.between(taxable_value - 1.0, taxable_value + 1.0)
-        )
     if exclude_tx_id:
         query = query.filter(models.Transaction.id != exclude_tx_id)
     return db.query(query.exists()).scalar()
@@ -249,7 +240,7 @@ def _process_document(document_id: int, db: Session):
                     db.commit()
                     db.refresh(tx)
 
-                    tx.possible_duplicate = _is_duplicate_invoice(db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id, taxable_value=tx.taxable_value)
+                    tx.possible_duplicate = _is_duplicate_invoice(db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id)
                     db.commit()
                     db.refresh(tx)
 
