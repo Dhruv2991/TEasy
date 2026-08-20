@@ -5,9 +5,15 @@ from pydantic import BaseModel
 import pdfplumber
 import requests
 
+from ..tally.config import get_tally_config
+from ..settings import get_settings
+
 router = APIRouter(prefix="/bank", tags=["Bank Statements"])
 
-TALLY_URL = "http://127.0.0.1:9000"
+
+def _tally_url() -> str:
+    s = get_settings()
+    return f"http://{s.get('tally_host', 'localhost')}:{s.get('tally_port', 9000)}"
 
 
 class BankTransaction(BaseModel):
@@ -23,8 +29,8 @@ class BankTransaction(BaseModel):
 
 
 class PushToTallyRequest(BaseModel):
-    company_name: str = "Sarvotham Traders 2026-27"
-    bank_ledger: str = "SBIODA/C37970668924"
+    company_name: Optional[str] = None
+    bank_ledger: Optional[str] = None
     transactions: List[BankTransaction]
 
 
@@ -85,7 +91,7 @@ def get_existing_tally_ledgers(company_name: str) -> dict:
 
     try:
         res = requests.post(
-            TALLY_URL,
+            _tally_url(),
             data=request_xml.encode("utf-8"),
             headers={"Content-Type": "text/xml"},
             timeout=5,
@@ -162,8 +168,9 @@ async def upload_bank_statement(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Please upload a PDF bank statement.")
 
     transactions = []
-    company_name = "Sarvotham Traders 2026-27"
-    bank_ledger = "SBIODA/C37970668924"
+    tally_config = get_tally_config()
+    company_name = tally_config.get("company_name", "")
+    bank_ledger = tally_config.get("bank_ledger", "")
 
     try:
         with pdfplumber.open(file.file) as pdf:
@@ -228,8 +235,12 @@ async def push_to_tally(payload: PushToTallyRequest):
     pushed = 0
     errors = []
 
+    tally_config = get_tally_config()
+    company_name = payload.company_name or tally_config.get("company_name", "")
+    bank_ledger = payload.bank_ledger or tally_config.get("bank_ledger", "")
+
     # Fetch active ledgers in Tally
-    tally_ledgers = get_existing_tally_ledgers(payload.company_name)
+    tally_ledgers = get_existing_tally_ledgers(company_name)
 
     for tx in payload.transactions:
         raw_party = (tx.particulars or "").strip()
@@ -241,11 +252,11 @@ async def push_to_tally(payload: PushToTallyRequest):
             tx.particulars = "SALDEBTOR"
 
         xml_data = build_journal_voucher_xml(
-            payload.company_name, payload.bank_ledger, tx
+            company_name, bank_ledger, tx
         )
         try:
             res = requests.post(
-                TALLY_URL,
+                _tally_url(),
                 data=xml_data.encode("utf-8"),
                 headers={"Content-Type": "text/xml"},
                 timeout=5,

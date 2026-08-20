@@ -30,7 +30,7 @@ export function StatCard({ icon: IconComp, color, label, value, sublabel }) {
   );
 }
 
-export function TopBar({ title, subtitle, onNavigate, alertCount }) {
+export function TopBar({ title, subtitle, onNavigate, alertCount, companyName }) {
   return (
     <div className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-200">
       <div>
@@ -38,9 +38,11 @@ export function TopBar({ title, subtitle, onNavigate, alertCount }) {
         {subtitle && <p className="text-sm text-slate-500">{subtitle}</p>}
       </div>
       <div className="flex items-center gap-4">
-        <div className="text-sm text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5">
-          Sarvotham Traders 2026-27
-        </div>
+        {companyName && (
+          <div className="text-sm text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5">
+            {companyName}
+          </div>
+        )}
         <button
           onClick={() => onNavigate?.("issues")}
           className="relative w-9 h-9 rounded-full border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-50"

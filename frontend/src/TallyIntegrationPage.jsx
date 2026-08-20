@@ -13,6 +13,7 @@ const LEDGER_FIELDS = [
   ["input_sgst_ledger", "Input SGST (Purchase)"],
   ["input_igst_ledger", "Input IGST (Purchase)"],
   ["cash_ledger", "Cash Ledger"],
+  ["bank_ledger", "Bank Ledger (for bank statement import)"],
 ];
 
 export default function TallyIntegrationPage() {

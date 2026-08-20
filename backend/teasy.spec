@@ -5,7 +5,7 @@
 # yourself on another PC, or point a Windows installer tool like Inno Setup at)
 
 import os
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_dynamic_libs, collect_data_files
 
 block_cipher = None
 
@@ -40,13 +40,15 @@ HIDDEN_IMPORTS = (
         "pandas.io.formats.style",
     ]
     + collect_submodules("openpyxl")
+    + collect_submodules("pdfplumber")
+    + collect_submodules("pypdfium2")
 )
 
 a = Analysis(
     ["launcher.py"],
     pathex=[],
-    binaries=[],
-    datas=[(FRONTEND_DIST, "frontend_dist")],
+    binaries=collect_dynamic_libs("pypdfium2"),
+    datas=[(FRONTEND_DIST, "frontend_dist")] + collect_data_files("pdfplumber") + collect_data_files("pypdfium2"),
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     runtime_hooks=[],

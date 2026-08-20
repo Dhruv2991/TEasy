@@ -18,6 +18,7 @@ DEFAULT_CONFIG = {
     "input_igst_ledger": "Input IGST",
     "cash_ledger": "Cash",
     "round_off_ledger": "ROUNDOFF",
+    "bank_ledger": "Bank Account",
 }
 
 
