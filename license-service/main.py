@@ -50,16 +50,26 @@ RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 RAZORPAY_PLAN_ID = os.environ.get("RAZORPAY_PLAN_ID", "")
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 
+# Comma-separated list of allowed browser origins, e.g.
+#   ALLOWED_ORIGINS=https://t-easy.vercel.app,https://www.teasy.in
+# Set this in Render → Environment. Falls back to "*" only if unset, so
+# local dev/testing still works without extra setup.
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+
 rzp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)) if RAZORPAY_KEY_ID else None
 
 app = FastAPI(title="TEasy License Service")
 
 # Locked down to the landing page + the desktop app's local calls happen
 # server-to-server from the user's own machine (not a browser), so this can
-# stay narrow. Add your production landing page domain here.
+# stay narrow. Set ALLOWED_ORIGINS in your deploy environment.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # the desktop app calls this from Python, not a browser, so CORS mostly gates the landing page; tighten to your domain once it's live
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

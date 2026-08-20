@@ -47,7 +47,10 @@
     note.textContent = "No card required. Runs on your own PC — your data never leaves it.";
 
     try {
-      const base = (window.TEASY_CONFIG && window.TEASY_CONFIG.LICENSE_SERVICE_URL) || "";
+      const base = window.TEASY_CONFIG && window.TEASY_CONFIG.LICENSE_SERVICE_URL;
+      if (!base) {
+        throw new Error("Trial signup isn't configured yet — LICENSE_SERVICE_URL is missing.");
+      }
       const res = await fetch(`${base}/trial/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
