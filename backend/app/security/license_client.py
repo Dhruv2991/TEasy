@@ -71,7 +71,14 @@ def save_license_key(license_key: str) -> None:
 
 
 def start_trial(email: str) -> dict:
-    """Register a new trial and store the returned license_key locally."""
+    """Register a new trial and store the returned license_key locally.
+
+    If this email already has a trial/license on file, the server does NOT
+    issue a new one — it re-sends the existing key by email instead. We
+    surface that via is_new so the frontend can tell the user to check
+    their inbox rather than silently switching them onto someone else's
+    (or their own already-expired) license state.
+    """
     resp = requests.post(
         f"{LICENSE_SERVICE_URL}/trial/start",
         json={"email": email},
@@ -79,9 +86,18 @@ def start_trial(email: str) -> dict:
     )
     resp.raise_for_status()
     data = resp.json()
+    is_new = data.get("is_new", True)
+
+    if not is_new:
+        # Don't overwrite/activate the local cache with someone else's (or
+        # a stale) key just because the email field was re-submitted.
+        return {"is_new": False, "status": data.get("status"), "expires_at": data.get("expires_at")}
+
     save_license_key(data["license_key"])
     _remember_result(data)
-    return get_status()
+    result = get_status()
+    result["is_new"] = True
+    return result
 
 
 def _remember_result(remote: dict) -> None:
