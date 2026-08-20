@@ -1,12 +1,7 @@
 import os
 import sys
 from dotenv import load_dotenv
-import sys
-from app.security.hwid import verify_hardware_lock
 from app.routers import bank
-
-# Run hardware check before app boot
-verify_hardware_lock()
 
 # In dev mode this reads backend/.env as before. In the packaged .exe, the
 # working directory is unpredictable (wherever the user launched it from),
@@ -21,8 +16,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .database import engine, Base, run_lightweight_migrations
-from .routers import documents, transactions, gstr2b, tally, activity, settings as settings_router, reports
+from .routers import documents, transactions, gstr2b, tally, activity, settings as settings_router, reports, license as license_router
 from .paths import get_data_dir, get_frontend_dir
+from .security import license_client
 
 Base.metadata.create_all(bind=engine)
 run_lightweight_migrations()
@@ -50,10 +46,39 @@ app.include_router(activity.router)
 app.include_router(settings_router.router)
 app.include_router(bank.router)
 app.include_router(reports.router)
+app.include_router(license_router.router)
 
 @app.get("/api/status")
 def status():
     return {"status": "ok", "service": "TEasy Phase 1"}
+
+
+# Paths the frontend needs to reach even while unlicensed: the license
+# screens themselves, the basic health check, and static assets (JS/CSS/
+# images) so the React app can actually load and render the activation
+# screen instead of a blank page.
+_LICENSE_EXEMPT_PREFIXES = ("/api/license", "/api/status", "/assets", "/files")
+
+
+@app.middleware("http")
+async def enforce_license(request, call_next):
+    path = request.url.path
+    if path == "/" or path.startswith(_LICENSE_EXEMPT_PREFIXES) or not path.startswith("/api"):
+        # Non-API requests (the built frontend's index.html, JS, CSS) are
+        # always allowed through — the React app itself shows the
+        # activation screen and blocks feature use when unlicensed. Only
+        # API routes that touch real functionality are gated here.
+        return await call_next(request)
+
+    # Fast, cache-only check — this runs on every API request, so it must
+    # never itself make a network call. The cache is kept fresh by the
+    # frontend's periodic call to GET /api/license/status (the full check,
+    # in routers/license.py), plus the check at app startup.
+    if not license_client.is_valid_fast():
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=402, content={"detail": "license_invalid", "license": license_client.get_status()})
+
+    return await call_next(request)
 
 
 # Serve the built React frontend (frontend/dist), if present, so the packaged

@@ -15,6 +15,7 @@ import GstSettingsPage from "./GstSettingsPage.jsx";
 import PartiesPage from "./PartiesPage.jsx";
 import GeneralSettingsPage from "./GeneralSettingsPage.jsx";
 import FirstRunSetup from "./FirstRunSetup.jsx";
+import LicenseGate from "./LicenseGate.jsx";
 import BankStatementPage from "./BankStatementPage.jsx";
 
 const PAGE_META = {
@@ -40,12 +41,32 @@ export default function App() {
   const [counts, setCounts] = useState({ review: 0, issues: 0 });
   const [tallyConnected, setTallyConnected] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(null); // null = still checking
+  const [license, setLicense] = useState(null); // null = still checking
+
+  const checkLicense = useCallback(() => {
+    api.getLicenseStatus()
+      .then(setLicense)
+      .catch(() => setLicense({ activated: false, valid: false, status: "none" }));
+  }, []);
 
   useEffect(() => {
+    checkLicense();
+    // Re-verify with the license service periodically while the app is
+    // open, so a cancelled/lapsed subscription is caught even on a long
+    // running session, and so the local cache that the backend's per-request
+    // check relies on doesn't go stale. Every 30 min is plenty — this isn't
+    // meant to catch things instantly, just well within the offline grace
+    // window.
+    const t = setInterval(checkLicense, 30 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [checkLicense]);
+
+  useEffect(() => {
+    if (!license?.valid) return;
     api.getSettingsStatus()
       .then((s) => setNeedsSetup(!s.groq_key_set))
       .catch(() => setNeedsSetup(false)); // backend not up yet — don't block on a failed check
-  }, []);
+  }, [license]);
 
   const refreshCounts = useCallback(async () => {
     try {
@@ -70,6 +91,12 @@ export default function App() {
     return () => clearInterval(t);
   }, [refreshCounts]);
 
+  if (license === null) {
+    return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">Starting TEasy…</div>;
+  }
+  if (!license.valid) {
+    return <LicenseGate license={license} onRecheck={checkLicense} />;
+  }
   if (needsSetup === null) {
     return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">Starting TEasy…</div>;
   }

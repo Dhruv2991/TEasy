@@ -4,7 +4,7 @@ import UploadBox from "./UploadBox.jsx";
 import ReviewTable from "./ReviewTable.jsx";
 
 const CONFIG = {
-  sales: { docType: "SALES", label: "Sales Bills", accept: "image/*", uploadLabel: "Upload a sales bill photo" },
+  sales: { docType: "SALES", label: "Sales Bills", accept: "image/*,.xlsx,.xls", uploadLabel: "Upload a sales bill photo, or import a sales register Excel file" },
   purchase: { docType: "PURCHASE", label: "Purchase Bills (B2B Excel)", accept: ".xlsx,.xls", uploadLabel: "Import Purchase B2B Excel file" },
   gstr2b: { docType: "GSTR2B", label: "GSTR-2B (Discount Notes)", accept: ".xlsx,.xls", uploadLabel: "Import GSTR-2B Excel file" },
 };
@@ -29,6 +29,8 @@ export default function DocumentTypePage({ pageKey }) {
       await api.uploadGstr2b(file);
     } else if (pageKey === "purchase") {
       await api.uploadGstr2bPurchase(file);
+    } else if (pageKey === "sales" && /\.(xlsx|xls)$/i.test(file.name)) {
+      await api.uploadSalesExcel(file);
     } else {
       await api.uploadDocument(file, cfg.docType);
     }

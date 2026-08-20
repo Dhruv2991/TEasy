@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TEasy — Bills become books, automatically</title>
+<meta name="description" content="Photograph a bill. TEasy reads it, you verify it, it lands in Tally. Built for Indian accountants and small businesses doing GST bookkeeping." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div class="ledger-rule top"></div>
+
+<header class="nav">
+  <a href="#top" class="wordmark">TEasy<span class="wordmark-dot">.</span></a>
+  <nav class="nav-links">
+    <a href="#how">How it works</a>
+    <a href="#pricing">Pricing</a>
+  </nav>
+  <a href="#trial" class="nav-cta">Start free trial</a>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="eyebrow">GST bookkeeping for Indian small businesses</p>
+      <h1>Bills become books.<br>Automatically.</h1>
+      <p class="hero-sub">
+        Photograph a purchase bill, sales invoice, or bank statement.
+        TEasy reads it, you glance and approve, and it lands in Tally as a
+        clean voucher — no retyping, no missed GST line items.
+      </p>
+
+      <form id="trial-form" class="trial-form" novalidate>
+        <label for="trial-email" class="sr-only">Work email</label>
+        <input id="trial-email" type="email" placeholder="you@company.com" required autocomplete="email" />
+        <button type="submit">Start 7-day free trial</button>
+      </form>
+      <p class="trial-note" id="trial-note">No card required. Runs on your own PC — your data never leaves it.</p>
+
+      <div id="trial-result" class="trial-result" hidden>
+        <p class="trial-result-label">Your license key</p>
+        <code id="trial-key"></code>
+        <p class="trial-result-hint">Paste this into TEasy when you install it. We've noted it against your email too, in case you lose it.</p>
+        <a class="btn-secondary" id="download-link" href="#">Download TEasy for Windows →</a>
+      </div>
+    </div>
+
+    <div class="hero-art" aria-hidden="true">
+      <div class="receipt" id="receipt">
+        <div class="receipt-head">
+          <span>PURCHASE BILL</span>
+          <span class="receipt-serial">#IN-2026-0417</span>
+        </div>
+        <div class="receipt-line"><span>Ramesh Traders</span><span>GSTIN 27AA...4Z2</span></div>
+        <div class="receipt-line box b1"><span>Steel rods, 12mm</span><span class="mono">₹18,400.00</span></div>
+        <div class="receipt-line box b2"><span>CGST @ 9%</span><span class="mono">₹1,656.00</span></div>
+        <div class="receipt-line box b3"><span>SGST @ 9%</span><span class="mono">₹1,656.00</span></div>
+        <div class="receipt-total box b4"><span>Total</span><span class="mono">₹21,712.00</span></div>
+        <div class="stamp" id="stamp">VERIFIED</div>
+      </div>
+      <div class="ledger-out" id="ledger-out">
+        <div class="ledger-out-row head"><span>Ledger</span><span>Dr</span><span>Cr</span></div>
+        <div class="ledger-out-row"><span>Purchase A/c</span><span class="mono">21,712.00</span><span></span></div>
+        <div class="ledger-out-row"><span>Ramesh Traders</span><span></span><span class="mono">21,712.00</span></div>
+        <div class="ledger-out-row status">↳ pushed to Tally</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ledger-strip">
+    <div class="ledger-strip-row">
+      <span class="ledger-tag">Reads</span>
+      <p>Handwritten or printed, phone photo or scan — sales bills, purchase bills, bank statements, GSTR-2B exports.</p>
+    </div>
+    <div class="ledger-strip-row">
+      <span class="ledger-tag">Catches</span>
+      <p>Mismatched GST rates, duplicate bills, and anything it isn't confident about — flagged for you, not silently guessed.</p>
+    </div>
+    <div class="ledger-strip-row">
+      <span class="ledger-tag">Pushes</span>
+      <p>Approved entries go straight into Tally Prime as proper vouchers, ledgers and all — nothing to re-enter.</p>
+    </div>
+  </section>
+
+  <section class="how" id="how">
+    <h2>How it works</h2>
+    <ol class="how-steps">
+      <li>
+        <span class="how-num">1</span>
+        <h3>Photograph</h3>
+        <p>Snap a bill on your phone or drop a PDF in. No scanner needed.</p>
+      </li>
+      <li>
+        <span class="how-num">2</span>
+        <h3>Verify</h3>
+        <p>TEasy extracts every line item and shows you its confidence. You approve in seconds.</p>
+      </li>
+      <li>
+        <span class="how-num">3</span>
+        <h3>Push to Tally</h3>
+        <p>One click sends the voucher into Tally Prime, ledgers matched, GST split correctly.</p>
+      </li>
+    </ol>
+  </section>
+
+  <section class="pricing" id="pricing">
+    <div class="pricing-card">
+      <p class="eyebrow">One plan, everything included</p>
+      <div class="price">
+        <span class="price-amount mono">₹4,999</span>
+        <span class="price-period">/ month</span>
+      </div>
+      <ul class="price-list">
+        <li>Unlimited bills and statements</li>
+        <li>Tally Prime push, built in</li>
+        <li>Runs locally — your data stays on your PC</li>
+        <li>7-day free trial, no card needed</li>
+      </ul>
+      <a href="#trial" class="btn-primary">Start free trial</a>
+      <p class="price-footnote">Billed monthly via Razorpay. Cancel any time — you keep access until the period you paid for ends.</p>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="ledger-rule"></div>
+  <div class="footer-row">
+    <span class="wordmark small">TEasy<span class="wordmark-dot">.</span></span>
+    <p>Built for Indian accountants and small businesses filing GST returns.</p>
+    <div class="footer-links">
+      <a href="about.html">About</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
+      <a href="refund.html">Refunds</a>
+    </div>
+  </div>
+</footer>
+
+<script src="config.js"></script>
+<script src="script.js"></script>
+</body>
+</html>

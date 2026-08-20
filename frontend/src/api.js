@@ -23,6 +23,21 @@ async function req(path, options = {}) {
 }
 
 export const api = {
+  getLicenseStatus: () => req("/api/license/status"),
+  startTrial: (email) =>
+    req("/api/license/start-trial", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    }),
+  activateLicense: (license_key) =>
+    req("/api/license/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ license_key }),
+    }),
+  createSubscription: () => req("/api/license/create-subscription", { method: "POST" }),
+
   listDocuments: () => req("/documents"),
   getDocument: (id) => req(`/documents/${id}`),
   getDocumentLogs: (id) => req(`/documents/${id}/logs`),
@@ -41,6 +56,11 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     return req("/gstr2b/purchase-upload", { method: "POST", body: form });
+  },
+  uploadSalesExcel: (file) => {
+    const form = new FormData();
+    form.append("file", file);
+    return req("/gstr2b/sales-upload", { method: "POST", body: form });
   },
 
   listTransactions: (status) =>

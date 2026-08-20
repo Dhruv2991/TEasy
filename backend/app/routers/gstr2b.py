@@ -11,6 +11,7 @@ from .. import models, schemas
 from ..paths import get_data_dir
 from ..gstr2b.parser import parse_gstr2b_excel
 from ..money import round_rupee
+from .transactions import _is_duplicate_invoice
 
 router = APIRouter(prefix="/gstr2b", tags=["gstr2b"])
 
@@ -61,6 +62,8 @@ def upload_gstr2b(file: UploadFile = File(...), db: Session = Depends(get_db)):
 
     _log(db, f"Parsed {len(rows)} credit/debit note row(s) from B2B-CDNR sheet(s)", document_id=doc.id)
 
+    seen_in_batch = set()
+
     for idx, row in enumerate(rows):
         # No source photo for GSTR-2B rows, so DetectedBill.crop_path is left
         # null (see models.py) — the frontend shows a document icon instead
@@ -105,12 +108,27 @@ def upload_gstr2b(file: UploadFile = File(...), db: Session = Depends(get_db)):
         db.commit()
         db.refresh(tx)
 
+        # A duplicate can come from two places: the same invoice already
+        # sitting in the DB (e.g. imported before, or added via photo/manual
+        # entry), or the same invoice appearing twice within this very Excel
+        # file (GST portal exports occasionally repeat rows across sheets).
+        batch_key = (tx_type, row.supplier_name, row.note_number)
+        in_batch_dupe = row.note_number and batch_key in seen_in_batch
+        in_db_dupe = _is_duplicate_invoice(db, tx_type, row.supplier_name, row.note_number, exclude_tx_id=tx.id)
+        tx.possible_duplicate = bool(in_batch_dupe or in_db_dupe)
+        if row.note_number:
+            seen_in_batch.add(batch_key)
+        db.commit()
+        db.refresh(tx)
+
         note = (
             f"Note {idx + 1} ({row.source_sheet}): {row.note_type} {row.note_number} "
             f"from {row.supplier_name} ({row.supplier_gstin}), value={row.note_value}"
         )
         if row.warnings:
             note += f" | warnings: {', '.join(row.warnings)}"
+        if tx.possible_duplicate:
+            note += " | ⚠ possible duplicate — same party + invoice number already seen"
         _log(db, note, document_id=doc.id, transaction_id=tx.id)
 
     doc.status = "NEEDS_REVIEW" if rows else "FAILED"
@@ -161,6 +179,8 @@ def upload_gstr2b_purchase(file: UploadFile = File(...), db: Session = Depends(g
         _log(db, f"Purchase B2B parsing failed unexpectedly: {e}", document_id=doc.id)
         raise HTTPException(500, f"Could not read this B2B Excel file: {e}")
 
+    seen_in_batch = set()
+
     for idx, row in enumerate(rows):
         bill = models.DetectedBill(
             document_id=doc.id,
@@ -192,12 +212,123 @@ def upload_gstr2b_purchase(file: UploadFile = File(...), db: Session = Depends(g
         db.commit()
         db.refresh(tx)
 
+        batch_key = ("PURCHASE", row.supplier_name, row.invoice_number)
+        in_batch_dupe = row.invoice_number and batch_key in seen_in_batch
+        in_db_dupe = _is_duplicate_invoice(db, "PURCHASE", row.supplier_name, row.invoice_number, exclude_tx_id=tx.id)
+        tx.possible_duplicate = bool(in_batch_dupe or in_db_dupe)
+        if row.invoice_number:
+            seen_in_batch.add(batch_key)
+        db.commit()
+        db.refresh(tx)
+
         note = (
             f"Purchase {idx + 1} ({row.source_sheet}): invoice {row.invoice_number} "
             f"from {row.supplier_name} ({row.supplier_gstin}), value={row.invoice_value}"
         )
         if row.warnings:
             note += f" | warnings: {', '.join(row.warnings)}"
+        if tx.possible_duplicate:
+            note += " | ⚠ possible duplicate — same party + invoice number already seen"
+        _log(db, note, document_id=doc.id, transaction_id=tx.id)
+
+    doc.status = "NEEDS_REVIEW" if rows else "FAILED"
+    db.commit()
+    db.refresh(doc)
+    return doc
+
+
+@router.post("/sales-upload", response_model=schemas.DocumentOut)
+def upload_sales_excel(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Import Sales invoices from the business's own sales register Excel.
+
+    Unlike purchases, there's no government file for outward supplies before
+    filing — this reads a plain sales sheet (Party, Invoice No, Date,
+    Taxable Value, GST, Total). Existing photo-based sales entry is
+    untouched; this is an additional bulk-import path.
+    """
+    if not file.filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(400, "Please upload an .xlsx/.xls sales register file.")
+
+    from ..gstr2b.sales_parser import parse_sales_excel
+
+    ext = os.path.splitext(file.filename)[1] or ".xlsx"
+    saved_name = f"{uuid.uuid4().hex}{ext}"
+    saved_path = os.path.join(UPLOAD_DIR, saved_name)
+    with open(saved_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    doc = models.Document(
+        file_name=file.filename,
+        file_path=saved_path,
+        document_type="SALES",
+        status="PROCESSING",
+        uploaded_at=datetime.utcnow(),
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    _log(db, f"Sales register Excel '{file.filename}' uploaded", document_id=doc.id)
+
+    try:
+        rows = parse_sales_excel(saved_path)
+    except ValueError as e:
+        doc.status = "FAILED"
+        db.commit()
+        _log(db, f"Sales Excel parsing failed: {e}", document_id=doc.id)
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        doc.status = "FAILED"
+        db.commit()
+        _log(db, f"Sales Excel parsing failed unexpectedly: {e}", document_id=doc.id)
+        raise HTTPException(500, f"Could not read this Excel file: {e}")
+
+    seen_in_batch = set()
+
+    for idx, row in enumerate(rows):
+        bill = models.DetectedBill(
+            document_id=doc.id,
+            crop_path=None,
+            bbox=None,
+            order_in_page=idx,
+        )
+        db.add(bill)
+        db.commit()
+        db.refresh(bill)
+
+        tx = models.Transaction(
+            bill_id=bill.id,
+            type="SALES",
+            party=row.party,
+            date=row.invoice_date,
+            invoice_number=row.invoice_number,
+            taxable_value=row.taxable_value,
+            gst_rate=row.gst_rate,
+            cgst=row.cgst,
+            sgst=row.sgst,
+            igst=row.igst,
+            cess=row.cess,
+            total_value=round_rupee(row.total_value),
+            confidence=1.0,
+            status="NEEDS_REVIEW",
+        )
+        db.add(tx)
+        db.commit()
+        db.refresh(tx)
+
+        batch_key = ("SALES", row.party, row.invoice_number)
+        in_batch_dupe = row.invoice_number and batch_key in seen_in_batch
+        in_db_dupe = _is_duplicate_invoice(db, "SALES", row.party, row.invoice_number, exclude_tx_id=tx.id)
+        tx.possible_duplicate = bool(in_batch_dupe or in_db_dupe)
+        if row.invoice_number:
+            seen_in_batch.add(batch_key)
+        db.commit()
+        db.refresh(tx)
+
+        note = f"Sales {idx + 1} ({row.source_sheet}): invoice {row.invoice_number} for {row.party}, total={row.total_value}"
+        if row.warnings:
+            note += f" | warnings: {', '.join(row.warnings)}"
+        if tx.possible_duplicate:
+            note += " | ⚠ possible duplicate — same party + invoice number already seen"
         _log(db, note, document_id=doc.id, transaction_id=tx.id)
 
     doc.status = "NEEDS_REVIEW" if rows else "FAILED"
