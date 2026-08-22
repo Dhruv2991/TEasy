@@ -7,8 +7,20 @@ from datetime import datetime
 from xml.sax.saxutils import escape as xml_escape
 
 
+class MissingVoucherDateError(Exception):
+    """Raised when a transaction has no usable date to send to Tally."""
+    pass
+
+
 def _tally_date(iso_date) -> str:
-    """Formats date as YYYYMMDD for Tally XML."""
+    """Formats date as YYYYMMDD for Tally XML.
+
+    Deliberately does NOT fall back to today's date when the source date is
+    missing or unparseable — silently mis-dating a real invoice is worse
+    than failing loudly, since the user would never notice a wrong date was
+    pushed. Callers must catch MissingVoucherDateError and surface it as a
+    fixable issue instead of sending the voucher to Tally.
+    """
     if iso_date:
         try:
             if isinstance(iso_date, datetime):
@@ -18,7 +30,10 @@ def _tally_date(iso_date) -> str:
             return datetime.fromisoformat(str(iso_date)).strftime("%Y%m%d")
         except (ValueError, TypeError):
             pass
-    return datetime.utcnow().strftime("%Y%m%d")
+    raise MissingVoucherDateError(
+        "This transaction has no valid date. Open it in Review & Approve, "
+        "set the correct invoice date, and try pushing again."
+    )
 
 
 def find_rate_ledger(ledgers: list[dict], keyword: str, rate: float, exclude: list[str] | None = None) -> str | None:
