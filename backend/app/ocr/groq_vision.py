@@ -37,35 +37,43 @@ def _current_model() -> str:
 # `_current_key()` for anything that needs the live value.
 GROQ_API_KEY = _current_key()
 
-SALES_EXTRACTION_PROMPT = """You are an extremely careful accounting data-entry system reading ONE CROP from a handwritten Indian sales bill-book page. The original page contains FOUR separate bills arranged 2x2. This image is already cropped to exactly ONE bill. Never read handwriting from another quadrant.
+SALES_EXTRACTION_PROMPT = """You are an extremely careful accounting data-entry system reading ONE CROP from a handwritten Indian sales bill-book page (Sarvotham Traders bill-book format). The original page contains FOUR separate bills arranged 2x2, separated by dashed/perforated lines. This image is already cropped to exactly ONE bill. Never read handwriting from another quadrant.
 
 Your job is transcription, not estimation. A wrong number is worse than a missing number.
 
-FIELD MAP — locate the printed label first, then read the value beside that label:
-1. party: handwritten customer name beside the printed "Sri" / customer field. If genuinely blank, use "Cash". Never invent a customer.
-2. date: date beside the printed Date field. Return YYYY-MM-DD. If unclear, return null.
-3. invoice_number: handwritten value beside the printed "No." / "No. A" field. NEVER use V.No. Read character-by-character. If one character is unclear, return null rather than guessing.
-4. taxable_value: the FIRST/upper "Total" in the tax summary, BEFORE CGST/SGST/IGST.
-5. cgst: the CGST AMOUNT, not the percentage.
-6. sgst: the SGST AMOUNT, not the percentage.
-7. igst: the IGST AMOUNT if this is clearly an IGST bill; otherwise 0.
-8. gst_rate: combined GST percentage. Example CGST 6% + SGST 6% => 12. IGST 12% => 12.
-9. total_value: the FINAL/last "Total" in the tax summary, AFTER tax. This is the invoice total.
+FIELD MAP:
+
+1. party: Do NOT attempt to read the "Sri" line at all — this bill book is always used for cash sales and that field is essentially always left blank. Always return "party": "Cash" without spending any visual attention searching that line.
+
+2. invoice_number: Printed label is "No. A" in the top-left area, immediately followed by a handwritten number WRITTEN IN RED INK — this red color is the single most reliable way to find the right number, since every other handwritten figure on this bill is in blue/black ink. Read that red handwritten number character-by-character, then return it WITH the "A" prefix attached, e.g. if the red digits read "2406", return "A2406" (not just "2406", not "No. A2406"). Do NOT use the V.No. field (bottom-left, usually blank) — that is a different field entirely. If the red digits are genuinely illegible, return null rather than guessing.
+
+3. date: The printed "Date:" label sits in the SAME ROW as "No. A", on the opposite (right) side of that row. Read the handwritten date immediately after "Date:". Return YYYY-MM-DD. These bills are dated in 2026 — a date written as "13/8/26" means 13 August 2026 → "2026-08-13". If unclear, return null.
+
+4. taxable_value: In the bottom-left summary box, the FIRST/upper "Total" row (immediately below the boxed item table, BEFORE CGST/SGST). This is a clear multi-digit handwritten number, isolated in its own row — read it carefully digit-by-digit.
+
+5. GST amounts — READ THE RATE, THEN CALCULATE:
+   The printed labels read "CGST ___%" and "SGST ___%" — the blank is filled with a small handwritten number (typically a single or double digit, e.g. "6", "9"). This percentage figure is much easier to read reliably than the corresponding handwritten rupee amount beside it, so:
+   a. Read cgst_rate_percent and sgst_rate_percent as the handwritten numbers filled into those two blanks (they are usually equal to each other, e.g. both 6, or both 9).
+   b. Calculate: cgst = round(taxable_value * cgst_rate_percent / 100, 2), sgst = round(taxable_value * sgst_rate_percent / 100, 2).
+   c. Also look at the handwritten rupee amount actually written in the Amount column beside "CGST __%" and "SGST __%". If it is legible and clearly does NOT match your calculated cgst/sgst (more than a few rupees off), do not silently override your calculation — instead keep the calculated value as authoritative but say so explicitly in "notes" (e.g. "CGST written as 872 in amount column, matches calculated 6% of 14536 exactly" or "written amount looks like 850 but calculated 6% gives 872 — used calculated value").
+   d. igst: this bill format is always intra-state (CGST+SGST), so igst is always 0 unless you see an explicit "IGST" label instead of CGST/SGST.
+   e. gst_rate: cgst_rate_percent + sgst_rate_percent (e.g. 6 + 6 = 12).
+
+6. total_value: Calculate as taxable_value + cgst + sgst (+ igst if applicable). Cross-check against the bottom "Total" row in the summary box (the final total, after tax) if it's legible — if it disagrees with your calculation by more than a rounding difference, say so in "notes" but still return your calculated total_value as authoritative, since it's derived from the more-legible taxable_value and rate fields rather than a second handwritten total figure.
 
 IMPORTANT VISUAL PROCEDURE:
-- First inspect the whole crop to understand the bill layout.
-- Then zoom your attention to the header fields (No., Date, Sri).
-- Then inspect the bottom tax summary for every numeric field.
-- Re-read every handwritten digit once before answering.
-- Do not infer a number from arithmetic. If a number is not legible, return null for that field.
-- Do not copy numbers from nearby printed examples, GSTIN, phone numbers, V.No, HSN, or other fields.
-- Distinguish 0/6, 1/7, 3/8, 4/9 and 5/6 carefully.
+- First inspect the whole crop to understand the bill layout and confirm which quadrant you're reading.
+- Locate the RED handwritten invoice number first — it's the most visually distinct element on the page.
+- Then read the date on the same row.
+- Then read taxable_value (upper Total) and the CGST%/SGST% figures.
+- Distinguish 0/6, 1/7, 3/8, 4/9 and 5/6 carefully in every handwritten digit.
+- Do not copy numbers from GSTIN, phone numbers, V.No, HSN, or A/c No. fields.
 
 Return ONLY this JSON object:
 {
-  "party": "customer name or Cash",
+  "party": "Cash",
   "date": "YYYY-MM-DD or null",
-  "invoice_number": "exact handwritten invoice number or null",
+  "invoice_number": "A-prefixed invoice number read from the RED handwriting, or null",
   "taxable_value": number or null,
   "gst_rate": number or null,
   "cgst": number or null,
@@ -73,16 +81,12 @@ Return ONLY this JSON object:
   "igst": number or null,
   "total_value": number or null,
   "confidence": number from 0 to 1,
-  "notes": "specific ambiguity, if any"
+  "notes": "specific ambiguity, if any, including any written-vs-calculated GST mismatch"
 }
 
-NO-GUESSING RULES:
-- Never calculate a missing taxable value from total and GST.
-- Never calculate a missing CGST/SGST from the GST rate.
-- Never calculate a missing total from taxable + tax.
-- If the source field is blank, use null for that field (use 0 only when the tax type is clearly not applicable).
-- If two values conflict, preserve the values actually written and explain the conflict in notes.
-- If the crop is blurry, incomplete, contains more than one bill, or a required amount cannot be read, lower confidence and return null for the uncertain field.
+NO-GUESSING RULES (still apply to invoice_number, date, and taxable_value):
+- Never guess a digit you can't clearly distinguish — return null for that field instead.
+- If the crop is blurry, incomplete, contains more than one bill, or the red invoice number cannot be read, lower confidence and explain why in notes.
 - Do not claim 100% confidence. The final application performs a deterministic arithmetic check before anything can be approved for Tally.
 """
 

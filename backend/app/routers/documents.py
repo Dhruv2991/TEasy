@@ -15,6 +15,7 @@ from ..ocr.preprocess import preprocess_pipeline
 from ..ocr.bill_detector import crop_bills
 from ..ocr.grid_detector import detect_four_bill_grid
 from ..ocr.ai_vision import extract_bill_with_ai, extract_purchase_bill_with_ai, has_ai_key
+from ..tally.config import get_tally_config
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -235,7 +236,20 @@ def _process_document(document_id: int, db: Session):
                     tx = models.Transaction(
                         bill_id=bill.id,
                         type=doc.document_type,
-                        party=ai["party"] or ("Cash" if doc.document_type == "SALES" else "Unknown Supplier"),
+                        # For sales bills, party is always the configured Cash
+                        # Ledger — this bill-book format's "Sri" (customer)
+                        # field is essentially always left blank for cash
+                        # sales, so we don't ask the AI to read it at all
+                        # (one less thing that can be misread), and we don't
+                        # hardcode the literal string "Cash" either, since
+                        # that would silently create a stray duplicate ledger
+                        # for any user whose actual Cash Ledger is named
+                        # something else in Tally.
+                        party=(
+                            get_tally_config().get("cash_ledger", "Cash")
+                            if doc.document_type == "SALES"
+                            else (ai["party"] or "Unknown Supplier")
+                        ),
                         date=ai["date"],
                         invoice_number=ai["invoice_number"],
                         taxable_value=ai["taxable_value"],
