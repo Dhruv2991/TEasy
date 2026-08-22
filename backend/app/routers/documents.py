@@ -14,7 +14,7 @@ from ..money import round_rupee
 from ..ocr.preprocess import preprocess_pipeline
 from ..ocr.bill_detector import crop_bills
 from ..ocr.grid_detector import detect_four_bill_grid
-from ..ocr.groq_vision import extract_bill_with_ai, extract_purchase_bill_with_ai, _current_key as _groq_key
+from ..ocr.ai_vision import extract_bill_with_ai, extract_purchase_bill_with_ai, has_ai_key
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -184,11 +184,12 @@ def _process_document(document_id: int, db: Session):
             return
 
         for idx, (box, crop) in enumerate(box_crop_pairs):
-            # Small gap between Groq calls when a page has multiple bills —
-            # avoids bursting through the free-tier tokens-per-minute limit
-            # in the first place (the retry-with-backoff in groq_vision.py
-            # is still there as a backstop if this isn't enough).
-            if idx > 0 and _groq_key():
+            # Small gap between AI calls when a page has multiple bills —
+            # avoids bursting through the provider's free-tier per-minute
+            # limit in the first place (the retry-with-backoff in
+            # groq_vision.py/gemini_vision.py is still there as a backstop
+            # if this isn't enough).
+            if idx > 0 and has_ai_key():
                 time.sleep(2)
 
             crop_filename = f"{uuid.uuid4().hex}.jpg"
@@ -211,9 +212,10 @@ def _process_document(document_id: int, db: Session):
             db.commit()
             db.refresh(bill)
 
-            if _groq_key():
-                # Primary path: Groq vision model reads the crop directly.
-                # Much stronger on handwriting than Tesseract + regex.
+            if has_ai_key():
+                # Primary path: the selected AI provider (Groq or Gemini)
+                # reads the crop directly. Much stronger on handwriting
+                # than Tesseract + regex.
                 try:
                     if doc.document_type == "PURCHASE":
                         ai = extract_purchase_bill_with_ai(crop_path)
@@ -282,10 +284,11 @@ def _process_document(document_id: int, db: Session):
                     _log(db, f"Bill {idx + 1}: manual entry required because AI could not read it", document_id=doc.id, transaction_id=tx.id)
                     continue
 
-            # No API key: do not run the old amount heuristics for handwritten
-            # sales. A heuristic such as 'largest number = total' is exactly
-            # the kind of silent guessing this accounting workflow must avoid.
-            if not _groq_key():
+            # No API key configured for the active provider: do not run the
+            # old amount heuristics for handwritten sales. A heuristic such
+            # as 'largest number = total' is exactly the kind of silent
+            # guessing this accounting workflow must avoid.
+            if not has_ai_key():
                 tx = models.Transaction(
                     bill_id=bill.id, type=doc.document_type, party="Cash",
                     date=None, invoice_number=None, taxable_value=0.0,

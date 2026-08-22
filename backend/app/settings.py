@@ -11,8 +11,11 @@ import os
 from .paths import get_data_dir
 
 DEFAULTS = {
+    "ai_provider": "groq",  # "groq" or "gemini" — which vision API extract_bill_with_ai routes to
     "groq_api_key": "",
     "groq_vision_model": "",  # empty = use the built-in default
+    "gemini_api_key": "",
+    "gemini_vision_model": "",  # empty = use the built-in default
     "tally_host": "localhost",
     "tally_port": 9000,
     # Company GST profile — used to pre-fill vouchers and, later, for
@@ -45,6 +48,12 @@ def get_settings() -> dict:
         merged["groq_api_key"] = os.environ.get("GROQ_API_KEY", "")
     if not merged["groq_vision_model"]:
         merged["groq_vision_model"] = os.environ.get("GROQ_VISION_MODEL", "")
+    if not saved.get("ai_provider"):
+        merged["ai_provider"] = os.environ.get("AI_PROVIDER", "groq")
+    if not merged["gemini_api_key"]:
+        merged["gemini_api_key"] = os.environ.get("GEMINI_API_KEY", "")
+    if not merged["gemini_vision_model"]:
+        merged["gemini_vision_model"] = os.environ.get("GEMINI_VISION_MODEL", "")
     if not saved.get("tally_host"):
         merged["tally_host"] = os.environ.get("TALLY_HOST", "localhost")
     if not saved.get("tally_port"):
@@ -66,6 +75,12 @@ def save_settings(update: dict) -> dict:
         os.environ["GROQ_API_KEY"] = current["groq_api_key"]
     if current.get("groq_vision_model"):
         os.environ["GROQ_VISION_MODEL"] = current["groq_vision_model"]
+    if current.get("ai_provider"):
+        os.environ["AI_PROVIDER"] = current["ai_provider"]
+    if current.get("gemini_api_key"):
+        os.environ["GEMINI_API_KEY"] = current["gemini_api_key"]
+    if current.get("gemini_vision_model"):
+        os.environ["GEMINI_VISION_MODEL"] = current["gemini_vision_model"]
     if current.get("tally_host"):
         os.environ["TALLY_HOST"] = str(current["tally_host"])
     if current.get("tally_port"):
@@ -75,4 +90,11 @@ def save_settings(update: dict) -> dict:
 
 
 def has_groq_key() -> bool:
+    """Kept for backward compatibility with any older call sites — checks
+    the Groq key specifically, regardless of which provider is active.
+    For a provider-aware check, use ai_vision.has_ai_key() instead."""
     return bool(get_settings().get("groq_api_key"))
+
+
+def has_gemini_key() -> bool:
+    return bool(get_settings().get("gemini_api_key"))

@@ -3,9 +3,13 @@ import { api } from "./api.js";
 
 export default function GeneralSettingsPage() {
   const [loaded, setLoaded] = useState(false);
+  const [aiProvider, setAiProvider] = useState("groq");
   const [groqKey, setGroqKey] = useState("");
   const [groqKeySet, setGroqKeySet] = useState(false);
   const [groqPreview, setGroqPreview] = useState("");
+  const [geminiKey, setGeminiKey] = useState("");
+  const [geminiKeySet, setGeminiKeySet] = useState(false);
+  const [geminiPreview, setGeminiPreview] = useState("");
   const [tallyHost, setTallyHost] = useState("localhost");
   const [tallyPort, setTallyPort] = useState(9000);
   const [saving, setSaving] = useState(false);
@@ -15,8 +19,11 @@ export default function GeneralSettingsPage() {
 
   useEffect(() => {
     api.getSettings().then((s) => {
+      setAiProvider(s.ai_provider || "groq");
       setGroqKeySet(s.groq_api_key_set);
       setGroqPreview(s.groq_api_key_preview);
+      setGeminiKeySet(s.gemini_api_key_set);
+      setGeminiPreview(s.gemini_api_key_preview);
       setTallyHost(s.tally_host || "localhost");
       setTallyPort(s.tally_port || 9000);
       setLoaded(true);
@@ -27,11 +34,14 @@ export default function GeneralSettingsPage() {
     setSaving(true);
     setSavedMsg("");
     try {
-      const payload = { tally_host: tallyHost, tally_port: Number(tallyPort) };
+      const payload = { ai_provider: aiProvider, tally_host: tallyHost, tally_port: Number(tallyPort) };
       if (groqKey.trim()) payload.groq_api_key = groqKey.trim();
+      if (geminiKey.trim()) payload.gemini_api_key = geminiKey.trim();
       const res = await api.saveSettings(payload);
       setGroqKeySet(res.groq_api_key_set);
+      setGeminiKeySet(res.gemini_api_key_set);
       setGroqKey("");
+      setGeminiKey("");
       setSavedMsg("Saved.");
       setTimeout(() => setSavedMsg(""), 2500);
     } catch (e) {
@@ -61,29 +71,84 @@ export default function GeneralSettingsPage() {
   return (
     <div className="p-6 max-w-2xl space-y-6">
       <section className="bg-white rounded-xl border border-slate-200 p-5">
-        <h2 className="text-sm font-semibold text-slate-900 mb-1">Groq API key</h2>
+        <h2 className="text-sm font-semibold text-slate-900 mb-1">AI bill reading</h2>
         <p className="text-sm text-slate-500 mb-4">
-          Used for AI-powered bill reading. Get a free key at{" "}
-          <a className="text-violet-600 underline" href="https://console.groq.com/keys" target="_blank" rel="noreferrer">
-            console.groq.com/keys
-          </a>
-          . Without a key, TEasy falls back to a less accurate local OCR path.
+          Choose which AI reads your bill photos, and add its free API key. Without a key,
+          TEasy falls back to a less accurate local OCR path.
         </p>
-        {groqKeySet && (
-          <div className="text-xs text-emerald-600 bg-emerald-50 rounded-lg px-3 py-2 mb-3">
-            Key set ({groqPreview})
+
+        <label className="block text-xs font-medium text-slate-500 mb-2">Provider</label>
+        <div className="flex gap-2 mb-4">
+          <button
+            type="button"
+            onClick={() => setAiProvider("groq")}
+            className={`flex-1 text-sm px-3 py-2 rounded-lg border ${
+              aiProvider === "groq" ? "border-violet-600 bg-violet-50 text-violet-700" : "border-slate-300 text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            Groq {groqKeySet && <span className="text-emerald-600">●</span>}
+          </button>
+          <button
+            type="button"
+            onClick={() => setAiProvider("gemini")}
+            className={`flex-1 text-sm px-3 py-2 rounded-lg border ${
+              aiProvider === "gemini" ? "border-violet-600 bg-violet-50 text-violet-700" : "border-slate-300 text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            Gemini {geminiKeySet && <span className="text-emerald-600">●</span>}
+          </button>
+        </div>
+
+        {aiProvider === "groq" ? (
+          <div>
+            <p className="text-xs text-slate-500 mb-2">
+              Get a free key at{" "}
+              <a className="text-violet-600 underline" href="https://console.groq.com/keys" target="_blank" rel="noreferrer">
+                console.groq.com/keys
+              </a>
+            </p>
+            {groqKeySet && (
+              <div className="text-xs text-emerald-600 bg-emerald-50 rounded-lg px-3 py-2 mb-3">
+                Key set ({groqPreview})
+              </div>
+            )}
+            <label className="block text-xs font-medium text-slate-500 mb-1">
+              {groqKeySet ? "Replace key" : "API key"}
+            </label>
+            <input
+              type="password"
+              value={groqKey}
+              onChange={(e) => setGroqKey(e.target.value)}
+              placeholder="gsk_..."
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
+        ) : (
+          <div>
+            <p className="text-xs text-slate-500 mb-2">
+              Get a free key at{" "}
+              <a className="text-violet-600 underline" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
+                aistudio.google.com/apikey
+              </a>
+              . No credit card needed. Note: free-tier prompts may be used by Google to improve their models.
+            </p>
+            {geminiKeySet && (
+              <div className="text-xs text-emerald-600 bg-emerald-50 rounded-lg px-3 py-2 mb-3">
+                Key set ({geminiPreview})
+              </div>
+            )}
+            <label className="block text-xs font-medium text-slate-500 mb-1">
+              {geminiKeySet ? "Replace key" : "API key"}
+            </label>
+            <input
+              type="password"
+              value={geminiKey}
+              onChange={(e) => setGeminiKey(e.target.value)}
+              placeholder="AIza..."
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            />
           </div>
         )}
-        <label className="block text-xs font-medium text-slate-500 mb-1">
-          {groqKeySet ? "Replace key" : "API key"}
-        </label>
-        <input
-          type="password"
-          value={groqKey}
-          onChange={(e) => setGroqKey(e.target.value)}
-          placeholder="gsk_..."
-          className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
-        />
       </section>
 
       <section className="bg-white rounded-xl border border-slate-200 p-5">
