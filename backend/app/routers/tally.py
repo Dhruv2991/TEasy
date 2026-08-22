@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models
 from ..tally.config import get_tally_config, save_tally_config
-from ..tally.voucher_builder import build_voucher_envelope
+from ..tally.voucher_builder import build_voucher_envelope, MissingVoucherDateError
 from ..tally.tally_client import (
     test_connection,
     send_voucher_xml,
@@ -75,6 +75,8 @@ def push_approved_transactions(
                 msg = res.get("error_message") or "Bill already exists in Tally or could not be created."
                 return [PushResult(transaction_id=0, status="FAILED", message=msg)]
             return [PushResult(transaction_id=0, status="SENT", message="Voucher created in Tally")]
+        except MissingVoucherDateError as e:
+            return [PushResult(transaction_id=0, status="FAILED", message=str(e))]
         except Exception as e:
             return [PushResult(transaction_id=0, status="FAILED", message=str(e))]
 
@@ -84,6 +86,12 @@ def push_approved_transactions(
             models.Transaction.status == "APPROVED",
             models.Transaction.tally_status != "SENT",
         )
+        # Push in a stable, predictable order (chronological by invoice
+        # date, then insertion order as a tiebreaker) instead of whatever
+        # order Postgres happens to return — undefined order made it
+        # impossible to reason about "what got pushed in what sequence"
+        # when reviewing results or troubleshooting a failed batch.
+        .order_by(models.Transaction.date.asc(), models.Transaction.id.asc())
         .all()
     )
 
@@ -104,7 +112,15 @@ def push_approved_transactions(
             "total_value": tx.total_value,
             "gst_rate": getattr(tx, "gst_rate", 0.0),
         }
-        xml = build_voucher_envelope(tx_dict, config)
+        try:
+            xml = build_voucher_envelope(tx_dict, config)
+        except MissingVoucherDateError as e:
+            tx.tally_status = "FAILED"
+            tx.tally_error = str(e)
+            db.commit()
+            _log(db, f"Tally push blocked (missing date): {e}", transaction_id=tx.id)
+            results.append(PushResult(transaction_id=tx.id, status="FAILED", message=str(e)))
+            continue
 
         try:
             result = send_voucher_xml(xml)
@@ -177,7 +193,14 @@ def push_single_transaction(transaction_id: int, db: Session = Depends(get_db)):
         "total_value": tx.total_value,
         "gst_rate": getattr(tx, "gst_rate", 0.0),
     }
-    xml = build_voucher_envelope(tx_dict, config)
+    try:
+        xml = build_voucher_envelope(tx_dict, config)
+    except MissingVoucherDateError as e:
+        tx.tally_status = "FAILED"
+        tx.tally_error = str(e)
+        db.commit()
+        _log(db, f"Tally push blocked (missing date): {e}", transaction_id=tx.id)
+        return PushResult(transaction_id=tx.id, status="FAILED", message=str(e))
 
     try:
         result = send_voucher_xml(xml)

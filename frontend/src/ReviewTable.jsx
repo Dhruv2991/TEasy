@@ -262,6 +262,8 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
 export default function ReviewTable({ bills, onChanged }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [sortKey, setSortKey] = useState(null);   // "party" | "date" | "invoice_number" | "total_value" | "gst_rate" | "confidence" | "status"
+  const [sortDir, setSortDir] = useState("asc");  // "asc" | "desc"
 
   if (!bills.length) {
     return (
@@ -270,6 +272,59 @@ export default function ReviewTable({ bills, onChanged }) {
       </div>
     );
   }
+
+  // Sorting a freshly-scanned Excel/bill batch by column (party, date,
+  // amount, etc.) makes a messy dump of rows actually scannable — this is
+  // purely a display-order change; it doesn't touch the underlying data or
+  // which transactions get approved/pushed.
+  const sortableColumns = {
+    party: (b) => (b.transaction?.party || "").toLowerCase(),
+    date: (b) => b.transaction?.date || "",
+    invoice_number: (b) => (b.transaction?.invoice_number || "").toLowerCase(),
+    total_value: (b) => Number(b.transaction?.total_value) || 0,
+    gst_rate: (b) => Number(b.transaction?.gst_rate) || 0,
+    confidence: (b) => Number(b.transaction?.confidence) || 0,
+    status: (b) => b.transaction?.status || "",
+  };
+
+  const sortedBills = sortKey
+    ? [...bills].sort((a, b) => {
+        const getter = sortableColumns[sortKey];
+        const av = getter(a);
+        const bv = getter(b);
+        let cmp;
+        if (typeof av === "number" && typeof bv === "number") {
+          cmp = av - bv;
+        } else {
+          cmp = String(av).localeCompare(String(bv));
+        }
+        return sortDir === "asc" ? cmp : -cmp;
+      })
+    : bills;
+
+  const toggleSort = (key) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  };
+
+  const SortHeader = ({ colKey, children }) => (
+    <th
+      className="p-3 cursor-pointer select-none hover:text-slate-700"
+      onClick={() => toggleSort(colKey)}
+      title="Click to sort"
+    >
+      <span className="inline-flex items-center gap-1">
+        {children}
+        {sortKey === colKey && (
+          <span className="text-slate-400">{sortDir === "asc" ? "▲" : "▼"}</span>
+        )}
+      </span>
+    </th>
+  );
 
   // Collect all transaction IDs currently in the table
   const allTxIds = bills
@@ -396,19 +451,19 @@ export default function ReviewTable({ bills, onChanged }) {
                 />
               </th>
               <th className="p-3">Bill</th>
-              <th className="p-3">Party</th>
-              <th className="p-3">Date</th>
-              <th className="p-3">Invoice #</th>
-              <th className="p-3">Total</th>
-              <th className="p-3">GST %</th>
-              <th className="p-3">Confidence</th>
-              <th className="p-3">Status</th>
+              <SortHeader colKey="party">Party</SortHeader>
+              <SortHeader colKey="date">Date</SortHeader>
+              <SortHeader colKey="invoice_number">Invoice #</SortHeader>
+              <SortHeader colKey="total_value">Total</SortHeader>
+              <SortHeader colKey="gst_rate">GST %</SortHeader>
+              <SortHeader colKey="confidence">Confidence</SortHeader>
+              <SortHeader colKey="status">Status</SortHeader>
               <th className="p-3">Tally</th>
               <th className="p-3">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {bills.map((b) => (
+            {sortedBills.map((b) => (
               <TransactionRow
                 key={b.id}
                 bill={b}

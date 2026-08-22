@@ -33,6 +33,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 load_dotenv()
@@ -43,13 +44,36 @@ from database import Base, engine, get_db
 
 Base.metadata.create_all(bind=engine)
 
+# create_all() only creates missing tables, not new columns on tables that
+# already exist. This adds the "plan" column (introduced for monthly/yearly
+# billing) to a pre-existing licenses table without needing a full migration
+# tool — safe to run every startup since IF NOT EXISTS makes it a no-op once
+# the column is there.
+try:
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS plan VARCHAR DEFAULT 'monthly'"))
+        conn.commit()
+except Exception as e:
+    print(f"[startup] Skipped 'plan' column migration (likely already applied or non-Postgres DB): {e}")
+
 TRIAL_DAYS = int(os.environ.get("TRIAL_DAYS", "7"))
 GRACE_DAYS = int(os.environ.get("GRACE_DAYS", "5"))
 
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
-RAZORPAY_PLAN_ID = os.environ.get("RAZORPAY_PLAN_ID", "")
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+
+# Two billing intervals, two separate Razorpay Plans. RAZORPAY_PLAN_ID is
+# kept as a fallback alias for RAZORPAY_PLAN_ID_MONTHLY so existing Render
+# deployments configured before yearly billing existed don't break.
+RAZORPAY_PLAN_IDS = {
+    "monthly": os.environ.get("RAZORPAY_PLAN_ID_MONTHLY", os.environ.get("RAZORPAY_PLAN_ID", "")),
+    "yearly": os.environ.get("RAZORPAY_PLAN_ID_YEARLY", ""),
+}
+# How many billing cycles to authorize upfront, per interval — 120 monthly
+# cycles is ~10 years; 10 yearly cycles is also ~10 years. Razorpay requires
+# a finite total_count, not a real cap on how long someone can stay subscribed.
+RAZORPAY_TOTAL_COUNT = {"monthly": 120, "yearly": 10}
 
 # Comma-separated list of allowed browser origins, e.g.
 #   ALLOWED_ORIGINS=https://t-easy.vercel.app,https://www.teasy.in
@@ -113,6 +137,7 @@ class LicenseCheckRequest(BaseModel):
 
 class CreateSubscriptionRequest(BaseModel):
     license_key: str
+    plan: str = "monthly"  # "monthly" or "yearly"
 
 
 @app.get("/health")
@@ -185,21 +210,41 @@ def check_license(body: LicenseCheckRequest, db: Session = Depends(get_db)):
 
 @app.post("/billing/create-subscription")
 def create_subscription(body: CreateSubscriptionRequest, db: Session = Depends(get_db)):
-    if not rzp_client or not RAZORPAY_PLAN_ID:
-        raise HTTPException(500, "Billing isn't configured on the server yet")
+    interval = body.plan if body.plan in RAZORPAY_PLAN_IDS else "monthly"
+    plan_id = RAZORPAY_PLAN_IDS.get(interval)
+
+    if not rzp_client or not plan_id:
+        raise HTTPException(500, f"Billing isn't configured for the '{interval}' plan yet")
 
     lic = db.query(models.License).filter(models.License.license_key == body.license_key).first()
     if not lic:
         raise HTTPException(404, "Unknown license key")
 
+    if lic.status == "active" and _license_is_valid(lic):
+        raise HTTPException(400, "This license already has an active subscription.")
+
+    if lic.razorpay_subscription_id:
+        # Don't spin up a second Razorpay subscription if the user clicks
+        # "Subscribe" twice, retries after a slow response, or reopens the
+        # checkout tab before paying the first one — reuse the existing
+        # pending subscription's checkout link instead of creating a
+        # duplicate (which risked a double charge if both got paid).
+        try:
+            existing = rzp_client.subscription.fetch(lic.razorpay_subscription_id)
+            if existing.get("status") in ("created", "authenticated", "pending"):
+                return {"short_url": existing["short_url"], "subscription_id": existing["id"]}
+        except Exception:
+            pass  # couldn't fetch it (deleted/invalid) — fall through and create a fresh one
+
     subscription = rzp_client.subscription.create({
-        "plan_id": RAZORPAY_PLAN_ID,
+        "plan_id": plan_id,
         "customer_notify": 1,
-        "total_count": 120,  # ~10 years of monthly cycles; Razorpay requires a cap, not a real limit on how long they can stay subscribed
-        "notes": {"license_key": lic.license_key},
+        "total_count": RAZORPAY_TOTAL_COUNT.get(interval, 120),
+        "notes": {"license_key": lic.license_key, "plan": interval},
     })
 
     lic.razorpay_subscription_id = subscription["id"]
+    lic.plan = interval
     lic.status = "past_due"  # becomes "active" once the webhook confirms the first charge
     db.commit()
 
@@ -211,10 +256,15 @@ async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
     raw_body = await request.body()
     signature = request.headers.get("X-Razorpay-Signature", "")
 
-    if RAZORPAY_WEBHOOK_SECRET:
-        expected = hmac.new(RAZORPAY_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expected, signature):
-            raise HTTPException(400, "Invalid webhook signature")
+    if not RAZORPAY_WEBHOOK_SECRET:
+        # Refuse to process unsigned webhooks rather than silently trusting
+        # them — without a secret, anyone who finds this URL could POST a
+        # fake "subscription.charged" event and activate a license for free.
+        raise HTTPException(500, "Webhook secret not configured on the server")
+
+    expected = hmac.new(RAZORPAY_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(400, "Invalid webhook signature")
 
     payload = await request.json()
     event = payload.get("event", "")

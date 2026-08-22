@@ -48,6 +48,7 @@ class License(Base):
     current_period_end = Column(DateTime(timezone=True), nullable=True)
 
     razorpay_subscription_id = Column(String, nullable=True)
+    plan = Column(String, nullable=True, default="monthly")  # "monthly" or "yearly" — set once they actually subscribe; null during trial
 
     created_at = Column(DateTime(timezone=True), default=_now)
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)

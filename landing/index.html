@@ -26,7 +26,7 @@
 
 <main id="top">
 
-  <section class="hero">
+  <section class="hero" id="trial">
     <div class="hero-copy">
       <p class="eyebrow">GST bookkeeping for Indian small businesses</p>
       <h1>Bills become books.<br>Automatically.</h1>
@@ -136,21 +136,57 @@
   </section>
 
   <section class="pricing" id="pricing">
-    <div class="pricing-card">
-      <p class="eyebrow">One plan, everything included</p>
-      <div class="price">
-        <span class="price-amount mono">₹4,999</span>
-        <span class="price-period">/ month</span>
-      </div>
-      <ul class="price-list">
-        <li>Unlimited bills and statements</li>
-        <li>Tally Prime push, built in</li>
-        <li>Runs locally — your data stays on your PC</li>
-        <li>7-day free trial, no card needed</li>
-      </ul>
-      <a href="#trial" class="btn-primary">Start free trial</a>
-      <p class="price-footnote">Billed monthly via Razorpay. Cancel any time — you keep access until the period you paid for ends.</p>
+    <div class="pricing-intro">
+      <p class="eyebrow">Simple pricing, everything included</p>
+      <h2>One plan. Two ways to pay for it.</h2>
     </div>
+    <div class="pricing-grid">
+
+      <div class="pricing-card" data-plan="monthly">
+        <p class="eyebrow">Monthly</p>
+        <div class="price">
+          <span class="price-amount mono">₹499</span>
+          <span class="price-period">/ month</span>
+        </div>
+        <ul class="price-list">
+          <li>Unlimited bills and statements</li>
+          <li>Tally Prime push, built in</li>
+          <li>Runs locally — your data stays on your PC</li>
+          <li>7-day free trial, no card needed</li>
+        </ul>
+
+        <form class="subscribe-form" data-plan="monthly" novalidate>
+          <label class="sr-only" for="sub-email-monthly">Work email</label>
+          <input id="sub-email-monthly" type="email" placeholder="you@company.com" required autocomplete="email" />
+          <button type="submit" class="btn-primary">Subscribe monthly</button>
+        </form>
+        <p class="subscribe-note">You'll pay ₹499 now via Razorpay, then every month. Want to try free first? <a href="#trial">Start a 7-day trial</a> instead.</p>
+      </div>
+
+      <div class="pricing-card featured" data-plan="yearly">
+        <p class="eyebrow">Yearly <span class="save-badge">2 months free</span></p>
+        <div class="price">
+          <span class="price-amount mono">₹4,999</span>
+          <span class="price-period">/ year</span>
+        </div>
+        <p class="price-equiv">≈ ₹417/month, billed annually</p>
+        <ul class="price-list">
+          <li>Unlimited bills and statements</li>
+          <li>Tally Prime push, built in</li>
+          <li>Runs locally — your data stays on your PC</li>
+          <li>7-day free trial, no card needed</li>
+        </ul>
+
+        <form class="subscribe-form" data-plan="yearly" novalidate>
+          <label class="sr-only" for="sub-email-yearly">Work email</label>
+          <input id="sub-email-yearly" type="email" placeholder="you@company.com" required autocomplete="email" />
+          <button type="submit" class="btn-primary">Subscribe yearly</button>
+        </form>
+        <p class="subscribe-note">You'll pay ₹4,999 now via Razorpay, then every year. Want to try free first? <a href="#trial">Start a 7-day trial</a> instead.</p>
+      </div>
+
+    </div>
+    <p class="price-footnote">Billed via Razorpay. Cancel any time — you keep access until the period you paid for ends. Prefer to try before you pay? <a href="#trial">Start a free trial</a> instead.</p>
   </section>
 
 </main>

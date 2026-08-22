@@ -159,6 +159,16 @@ def get_status() -> dict:
             json={"license_key": license_key},
             timeout=REQUEST_TIMEOUT,
         )
+        if resp.status_code == 404:
+            # The server explicitly doesn't recognize this key (e.g. it was
+            # deleted/revoked) — this is a real "no", not a connectivity
+            # problem, so don't let the offline-grace period paper over it.
+            cache["valid"] = False
+            cache["status"] = "unknown_key"
+            cache["last_online_check"] = _now().isoformat()
+            _save_cache(cache)
+            return {"activated": True, "valid": False, "status": "unknown_key", "source": "online"}
+
         resp.raise_for_status()
         remote = resp.json()
         _remember_result(remote)
