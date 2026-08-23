@@ -48,6 +48,7 @@ def run_lightweight_migrations():
         "possible_duplicate": "BOOLEAN DEFAULT 0",
         "cess": "FLOAT DEFAULT 0.0",
         "gst_rate_uncertain": "BOOLEAN DEFAULT 0",
+        "manually_reviewed": "BOOLEAN DEFAULT 0",
         "rate_breakdown": "TEXT",
         "rate_breakdown_source": "VARCHAR",
     }

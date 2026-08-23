@@ -121,7 +121,15 @@ def upload_document(
     if document_type not in ("SALES", "PURCHASE"):
         raise HTTPException(400, f"Unsupported document_type '{document_type}' (expected SALES or PURCHASE)")
 
-    ext = os.path.splitext(file.filename)[1] or ".jpg"
+    ext = (os.path.splitext(file.filename)[1] or ".jpg").lower()
+    allowed_ext = {".jpg", ".jpeg", ".png", ".webp", ".pdf", ".xlsx", ".xls"}
+    if ext not in allowed_ext:
+        raise HTTPException(
+            400,
+            f"Unsupported file type '{ext}'. Upload a bill photo (.jpg/.png), a PDF invoice, "
+            "or an Excel sheet of bills (.xlsx/.xls).",
+        )
+
     saved_name = f"{uuid.uuid4().hex}{ext}"
     saved_path = os.path.join(UPLOAD_DIR, saved_name)
 
@@ -140,10 +148,104 @@ def upload_document(
     db.refresh(doc)
     _log(db, f"Document '{file.filename}' uploaded ({document_type})", document_id=doc.id)
 
-    _process_document(doc.id, db)
+    if ext in (".xlsx", ".xls"):
+        _process_excel_document(doc.id, db)
+    else:
+        _process_document(doc.id, db)
 
     db.refresh(doc)
     return doc
+
+
+def _process_excel_document(document_id: int, db: Session):
+    """General-users path: a spreadsheet where each row is one bill (their
+    own sales/purchase register), rather than a photo. No AI/OCR involved —
+    the values are read directly from the sheet, so confidence is set to
+    1.0 for a fully-populated row (still routed to NEEDS_REVIEW, same as
+    every other source, so nothing skips human approval)."""
+    from ..extraction.bill_excel_parser import parse_bill_excel
+
+    doc = db.query(models.Document).get(document_id)
+    if doc is None:
+        return
+
+    try:
+        doc.status = "PROCESSING"
+        db.commit()
+
+        rows = parse_bill_excel(doc.file_path)
+    except ValueError as e:
+        doc.status = "FAILED"
+        db.commit()
+        _log(db, f"Excel parsing failed: {e}", document_id=doc.id)
+        return
+    except Exception as e:
+        doc.status = "FAILED"
+        db.commit()
+        _log(db, f"Excel parsing failed unexpectedly: {e}", document_id=doc.id)
+        return
+
+    _log(db, f"Parsed {len(rows)} bill row(s) from '{doc.file_name}'", document_id=doc.id)
+
+    for idx, row in enumerate(rows):
+        # No source photo for a spreadsheet row, so crop_path stays null —
+        # same pattern already used for GSTR-2B-derived rows.
+        bill = models.DetectedBill(document_id=doc.id, crop_path=None, bbox=None, order_in_page=idx)
+        db.add(bill)
+        db.commit()
+        db.refresh(bill)
+
+        party = row.party or (
+            get_tally_config().get("cash_ledger", "Cash") if doc.document_type == "SALES" else "Unknown Supplier"
+        )
+        # Exact numbers straight from the sheet, so confidence isn't an AI
+        # read-quality signal here — 1.0 unless a required field is
+        # actually missing, in which case the row needs manual completion
+        # like any other incomplete transaction.
+        confidence = 0.5 if row.warnings else 1.0
+
+        tx = models.Transaction(
+            bill_id=bill.id, type=doc.document_type, party=party, date=row.date,
+            invoice_number=row.invoice_number, taxable_value=row.taxable_value,
+            gst_rate=row.gst_rate, cgst=row.cgst, sgst=row.sgst, igst=row.igst,
+            total_value=round_rupee(row.total_value), confidence=confidence,
+            status="NEEDS_REVIEW",
+        )
+        db.add(tx)
+        db.commit()
+        db.refresh(tx)
+
+        tx.possible_duplicate = _is_duplicate_invoice(
+            db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id, taxable_value=tx.taxable_value
+        )
+        db.commit()
+        db.refresh(tx)
+
+        note = f"Row {idx + 1} (Excel, {doc.document_type}): total={row.total_value}"
+        if row.warnings:
+            note += " | ⚠ " + "; ".join(row.warnings)
+        if tx.possible_duplicate:
+            note += f" | ⚠ POSSIBLE DUPLICATE invoice_number '{tx.invoice_number}' for {tx.party}"
+        _log(db, note, document_id=doc.id, transaction_id=tx.id)
+
+    doc.status = "NEEDS_REVIEW"
+    db.commit()
+
+
+def _pdf_pages_to_images(pdf_path: str) -> list:
+    """Rasterizes each PDF page to a BGR numpy image (OpenCV format) using
+    pdfplumber, which is already a project dependency — avoids adding a new
+    external binary (poppler/ghostscript) requirement just for this."""
+    import numpy as np
+    import pdfplumber
+
+    images = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            pil_img = page.to_image(resolution=200).original.convert("RGB")
+            arr = np.array(pil_img)
+            images.append(cv2.cvtColor(arr, cv2.COLOR_RGB2BGR))
+    return images
 
 
 def _process_document(document_id: int, db: Session):
@@ -155,28 +257,52 @@ def _process_document(document_id: int, db: Session):
         doc.status = "PROCESSING"
         db.commit()
 
-        img = preprocess_pipeline(doc.file_path)
+        ext = os.path.splitext(doc.file_path)[1].lower()
 
-        if doc.document_type == "PURCHASE":
-            # Purchase bills are supplier invoices — one printed invoice per
-            # photo is the overwhelmingly common case (unlike the sales
-            # bill-book which packs 4 handwritten forms onto one page), so
-            # skip the multi-bill grid/contour splitting and treat the whole
-            # photo as a single bill. This also avoids the grid detector
-            # mistakenly slicing one A4 invoice into fake sub-regions.
-            h, w = img.shape[:2]
-            boxes = [(0, 0, w, h)]
-            detection_method = "single (purchase)"
+        if ext == ".pdf":
+            # A PDF invoice/bill is a printed single document per page —
+            # same "whole page is one bill" treatment already used for
+            # purchase photos, applied per page, then fed through the exact
+            # same AI vision extraction used for photos (same accuracy
+            # path, not a separate weaker one).
+            try:
+                page_images = _pdf_pages_to_images(doc.file_path)
+            except Exception as e:
+                doc.status = "FAILED"
+                db.commit()
+                _log(db, f"Could not open/rasterize this PDF: {e}", document_id=doc.id)
+                return
+            if not page_images:
+                doc.status = "FAILED"
+                db.commit()
+                _log(db, "This PDF has no readable pages", document_id=doc.id)
+                return
+            box_crop_pairs = [((0, 0, im.shape[1], im.shape[0]), im) for im in page_images]
+            detection_method = f"single bill per page ({len(page_images)} page(s) from PDF)"
         else:
-            # Sales pages in this project are 4 handwritten bill-book forms in
-            # a 2x2 layout. Split deterministically into four regions. This is
-            # deliberately NOT a contour guess: internal table lines and
-            # handwriting must never cause one bill to be merged with another.
-            boxes = detect_four_bill_grid(img)
-            detection_method = "deterministic 2x2 sales grid"
+            img = preprocess_pipeline(doc.file_path)
 
-        box_crop_pairs = crop_bills(img, boxes)
-        _log(db, f"Detected {len(box_crop_pairs)} valid bill(s) on page via {detection_method} detection (from {len(boxes)} candidate region(s))", document_id=doc.id)
+            if doc.document_type == "PURCHASE":
+                # Purchase bills are supplier invoices — one printed invoice per
+                # photo is the overwhelmingly common case (unlike the sales
+                # bill-book which packs 4 handwritten forms onto one page), so
+                # skip the multi-bill grid/contour splitting and treat the whole
+                # photo as a single bill. This also avoids the grid detector
+                # mistakenly slicing one A4 invoice into fake sub-regions.
+                h, w = img.shape[:2]
+                boxes = [(0, 0, w, h)]
+                detection_method = "single (purchase)"
+            else:
+                # Sales pages in this project are 4 handwritten bill-book forms in
+                # a 2x2 layout. Split deterministically into four regions. This is
+                # deliberately NOT a contour guess: internal table lines and
+                # handwriting must never cause one bill to be merged with another.
+                boxes = detect_four_bill_grid(img)
+                detection_method = "deterministic 2x2 sales grid"
+
+            box_crop_pairs = crop_bills(img, boxes)
+
+        _log(db, f"Detected {len(box_crop_pairs)} valid bill(s) on page via {detection_method} detection", document_id=doc.id)
 
         if not box_crop_pairs:
             doc.status = "FAILED"

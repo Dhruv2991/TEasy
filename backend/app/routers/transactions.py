@@ -52,7 +52,17 @@ def _is_duplicate_invoice(
 
 
 def _validate_sales_tx(tx: models.Transaction) -> list[str]:
-    """Safety gate for handwritten sales: checks required fields, AI confidence, and tax math."""
+    """Safety gate for handwritten sales: checks required fields, AI confidence, and tax math.
+
+    The AI-confidence check only applies to what the AI produced without a
+    human looking at it — including the 0% rows created when AI extraction
+    fails entirely and the user has to fill everything in by hand. Once the
+    user has actually opened and saved an edit on this transaction (see
+    manually_reviewed below), that's a human confirming the values with
+    their own eyes; re-blocking approval on a stale/never-meaningful AI
+    confidence score at that point would be a false gate, not a real
+    safety check.
+    """
     missing = []
     if tx.type == "SALES":
         if not tx.date:
@@ -63,8 +73,8 @@ def _validate_sales_tx(tx: models.Transaction) -> list[str]:
             missing.append("total value")
         if not tx.invoice_number:
             missing.append("invoice number")
-        if (tx.confidence or 0) < 0.80:
-            missing.append("AI confidence >= 0.80")
+        if not tx.manually_reviewed and (tx.confidence or 0) < 0.80:
+            missing.append("AI confidence >= 0.80 (or edit & save the transaction to confirm it manually)")
         tax = (tx.cgst or 0) + (tx.sgst or 0) + (tx.igst or 0)
         if (
             tx.taxable_value is not None
@@ -93,10 +103,17 @@ def update_transaction(
     if tx is None:
         raise HTTPException(404, "Transaction not found")
 
-    for field_name, value in payload.dict(exclude_unset=True).items():
+    changed_fields = payload.dict(exclude_unset=True)
+    for field_name, value in changed_fields.items():
         if field_name == "total_value":
             value = round_rupee(value)
         setattr(tx, field_name, value)
+
+    # A real edit means a human has actually looked at this row and
+    # confirmed/corrected it — that's what lets a 0%-or-low-AI-confidence
+    # transaction clear the approval gate above.
+    if changed_fields:
+        tx.manually_reviewed = True
 
     # Re-check duplicate status
     tx.possible_duplicate = _is_duplicate_invoice(

@@ -20,6 +20,7 @@ class TransactionOut(BaseModel):
     status: str
     possible_duplicate: bool = False
     gst_rate_uncertain: bool = False
+    manually_reviewed: bool = False
     rate_breakdown: Optional[str] = None  # JSON string, see models.py
     rate_breakdown_source: Optional[str] = None
     tally_status: str = "NOT_SENT"

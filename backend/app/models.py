@@ -76,6 +76,14 @@ class Transaction(Base):
     # look before approving. See _flag_duplicate_invoice() in documents.py.
     possible_duplicate = Column(Boolean, default=False)
     gst_rate_uncertain = Column(Boolean, default=False)  # True when the source Excel doesn't cleanly determine a single GST rate (mixed-rate invoice) — the totals are still exact, only the rate label is unresolved
+    # True once a user has opened this transaction in Review & Approve and
+    # saved an actual change to it. A transaction that came in at 0%/low AI
+    # confidence (e.g. a blank manual-entry row created when AI extraction
+    # failed) is otherwise permanently blocked from Approve — but once a
+    # human has actually looked at it and filled in/corrected the real
+    # values, that confidence score no longer describes anything the
+    # approval gate should still be enforcing.
+    manually_reviewed = Column(Boolean, default=False)
     # JSON string: [{"rate": 5, "taxable_value": ..., "cgst": ..., "sgst": ..., "igst": ...}, ...]
     # Populated only when a supplier-provided invoice Excel was matched against
     # this transaction's GSTR-2B totals (see gstr2b/supplier_match.py). When

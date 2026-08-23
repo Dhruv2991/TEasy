@@ -4,8 +4,18 @@ import UploadBox from "./UploadBox.jsx";
 import ReviewTable from "./ReviewTable.jsx";
 
 const CONFIG = {
-  sales: { docType: "SALES", label: "Sales Bills", accept: "image/*,.xlsx,.xls", uploadLabel: "Upload a sales bill photo, or import a sales register Excel file" },
-  purchase: { docType: "PURCHASE", label: "Purchase Bills (B2B Excel)", accept: ".xlsx,.xls", uploadLabel: "Import Purchase B2B Excel file" },
+  sales: {
+    docType: "SALES",
+    label: "Sales Bills",
+    accept: "image/*,.pdf,.xlsx,.xls",
+    uploadLabel: "Upload a sales bill photo/PDF, or import a sales register Excel file",
+  },
+  purchase: {
+    docType: "PURCHASE",
+    label: "Purchase Bills",
+    accept: "image/*,.pdf,.xlsx,.xls",
+    uploadLabel: "Upload a purchase bill photo/PDF, a bill-list Excel, or import a GSTR-2B B2B Excel file",
+  },
   gstr2b: { docType: "GSTR2B", label: "GSTR-2B (Discount Notes)", accept: ".xlsx,.xls", uploadLabel: "Import GSTR-2B Excel file" },
 };
 
@@ -25,13 +35,31 @@ export default function DocumentTypePage({ pageKey }) {
   }, [refresh]);
 
   const handleUpload = async (file) => {
+    const isExcel = /\.(xlsx|xls)$/i.test(file.name);
+
     if (pageKey === "gstr2b") {
       await api.uploadGstr2b(file);
-    } else if (pageKey === "purchase") {
-      await api.uploadGstr2bPurchase(file);
-    } else if (pageKey === "sales" && /\.(xlsx|xls)$/i.test(file.name)) {
+    } else if (pageKey === "purchase" && isExcel) {
+      // Purchase Excel can be either the GSTR-2B B2B bulk export (one
+      // government-format file, many invoices, used for the rate-mismatch
+      // workflow) or just a general "my purchase bills" list a user kept
+      // themselves. Try the B2B importer first since that's the more
+      // specific/structured format; if the sheet doesn't actually match
+      // it, fall back to the general per-bill parser rather than making
+      // the user pick the "right" importer themselves.
+      try {
+        await api.uploadGstr2bPurchase(file);
+      } catch (e) {
+        await api.uploadDocument(file, cfg.docType);
+      }
+    } else if (pageKey === "sales" && isExcel) {
       await api.uploadSalesExcel(file);
     } else {
+      // Photos and PDFs (both Sales and Purchase) go through the general
+      // document pipeline — PDFs are rasterized page-by-page server-side
+      // and read with the exact same AI vision extraction used for
+      // photos, so accuracy doesn't drop just because the source was a
+      // PDF instead of a phone photo.
       await api.uploadDocument(file, cfg.docType);
     }
     refresh();
