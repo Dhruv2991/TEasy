@@ -10,7 +10,6 @@ from ..database import get_db
 from .. import models, schemas
 from ..paths import get_data_dir
 from ..gstr2b.parser import parse_gstr2b_excel
-from ..money import round_rupee
 from .transactions import _is_duplicate_invoice
 
 router = APIRouter(prefix="/gstr2b", tags=["gstr2b"])
@@ -100,7 +99,7 @@ def upload_gstr2b(file: UploadFile = File(...), db: Session = Depends(get_db)):
             sgst=row.state_tax,
             igst=row.integrated_tax,
             cess=row.cess,
-            total_value=round_rupee(row.note_value),
+            total_value=row.note_value,
             confidence=1.0,  # deterministic parse of a structured government file, not an OCR guess
             status="NEEDS_REVIEW",
         )
@@ -275,7 +274,7 @@ def upload_gstr2b_purchase(file: UploadFile = File(...), db: Session = Depends(g
             sgst=row.state_tax,
             igst=row.integrated_tax,
             cess=row.cess,
-            total_value=round_rupee(row.invoice_value),
+            total_value=row.invoice_value,
             confidence=1.0,
             status="NEEDS_REVIEW",
         )
@@ -382,7 +381,7 @@ def upload_sales_excel(file: UploadFile = File(...), db: Session = Depends(get_d
             sgst=row.sgst,
             igst=row.igst,
             cess=row.cess,
-            total_value=round_rupee(row.total_value),
+            total_value=row.total_value,
             confidence=1.0,
             status="NEEDS_REVIEW",
         )

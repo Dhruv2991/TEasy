@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from .. import models, schemas
-from ..money import round_rupee
 from ..ocr.preprocess import preprocess_pipeline
 from ..ocr.bill_detector import crop_bills
 from ..ocr.grid_detector import detect_four_bill_grid
@@ -208,7 +207,7 @@ def _process_excel_document(document_id: int, db: Session):
             bill_id=bill.id, type=doc.document_type, party=party, date=row.date,
             invoice_number=row.invoice_number, taxable_value=row.taxable_value,
             gst_rate=row.gst_rate, cgst=row.cgst, sgst=row.sgst, igst=row.igst,
-            total_value=round_rupee(row.total_value), confidence=confidence,
+            total_value=row.total_value, confidence=confidence,
             status="NEEDS_REVIEW",
         )
         db.add(tx)
@@ -383,7 +382,7 @@ def _process_document(document_id: int, db: Session):
                         cgst=ai["cgst"],
                         sgst=ai["sgst"],
                         igst=ai["igst"],
-                        total_value=round_rupee(ai["total_value"]),
+                        total_value=ai["total_value"],
                         confidence=ai["confidence"],
                         status="NEEDS_REVIEW",
                     )

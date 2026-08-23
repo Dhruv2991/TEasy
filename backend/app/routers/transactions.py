@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from .. import models, schemas
-from ..money import round_rupee
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
@@ -105,8 +104,13 @@ def update_transaction(
 
     changed_fields = payload.dict(exclude_unset=True)
     for field_name, value in changed_fields.items():
-        if field_name == "total_value":
-            value = round_rupee(value)
+        # No rounding here — taxable_value/cgst/sgst/igst/total_value are
+        # all stored at full precision as the user typed them. Rounding
+        # total_value alone at this point (while the tax components stay
+        # exact) is exactly what created spurious taxable+tax≠total
+        # mismatches downstream. Rounding happens exactly once, at the very
+        # end, only when the voucher is actually built for Tally (see
+        # tally/voucher_builder.py) — never before.
         setattr(tx, field_name, value)
 
     # A real edit means a human has actually looked at this row and

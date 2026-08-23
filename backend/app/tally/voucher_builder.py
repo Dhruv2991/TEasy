@@ -6,6 +6,8 @@ All Note types (Credit Note, Debit Note, CDN) are routed directly into Tally's "
 from datetime import datetime
 from xml.sax.saxutils import escape as xml_escape
 
+from ..money import round_rupee
+
 
 class MissingVoucherDateError(Exception):
     """Raised when a transaction has no usable date to send to Tally."""
@@ -179,7 +181,19 @@ def build_voucher_xml(vch_type_str: str, tx: dict, config: dict, ledgers: list[d
     cgst = float(tx.get("cgst") or 0.0)
     sgst = float(tx.get("sgst") or 0.0)
     igst = float(tx.get("igst") or 0.0)
-    total = float(tx.get("total_value") or 0.0)
+
+    # This is the ONLY place total_value gets rounded to a whole rupee.
+    # Every earlier stage (AI extraction, GSTR-2B import, manual edit)
+    # stores the exact value as read/typed — taxable_value and the GST
+    # components are never rounded early either. Rounding total_value
+    # early while leaving the tax components exact is exactly what used
+    # to create a spurious mismatch between "taxable + tax" and "total"
+    # that had nothing to do with the actual bill. Rounding happens here,
+    # once, right before the voucher is actually written, and any real
+    # residual difference goes to the ROUNDOFF ledger below — same as
+    # Tally's own convention of rounding the invoice total, not its
+    # components.
+    total = round_rupee(tx.get("total_value")) or 0.0
 
     rate = float(tx.get("gst_rate") or 0.0)
     if not rate and taxable > 0:
