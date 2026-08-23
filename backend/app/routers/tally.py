@@ -2,6 +2,7 @@
 FastAPI Router for Tally operations, database transaction sync, and configuration.
 """
 
+import json
 from typing import Any, Dict
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel
@@ -111,6 +112,7 @@ def push_approved_transactions(
             "igst": tx.igst,
             "total_value": tx.total_value,
             "gst_rate": getattr(tx, "gst_rate", 0.0),
+            "rate_breakdown": json.loads(tx.rate_breakdown) if getattr(tx, "rate_breakdown", None) else None,
         }
         try:
             xml = build_voucher_envelope(tx_dict, config)
@@ -192,6 +194,7 @@ def push_single_transaction(transaction_id: int, db: Session = Depends(get_db)):
         "igst": tx.igst,
         "total_value": tx.total_value,
         "gst_rate": getattr(tx, "gst_rate", 0.0),
+        "rate_breakdown": json.loads(tx.rate_breakdown) if getattr(tx, "rate_breakdown", None) else None,
     }
     try:
         xml = build_voucher_envelope(tx_dict, config)

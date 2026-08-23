@@ -47,6 +47,9 @@ def run_lightweight_migrations():
         "tally_error": "VARCHAR",
         "possible_duplicate": "BOOLEAN DEFAULT 0",
         "cess": "FLOAT DEFAULT 0.0",
+        "gst_rate_uncertain": "BOOLEAN DEFAULT 0",
+        "rate_breakdown": "TEXT",
+        "rate_breakdown_source": "VARCHAR",
     }
     with engine.begin() as conn:
         for col_name, col_def in additions.items():

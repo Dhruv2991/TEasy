@@ -19,11 +19,20 @@ class TransactionOut(BaseModel):
     confidence: float
     status: str
     possible_duplicate: bool = False
+    gst_rate_uncertain: bool = False
+    rate_breakdown: Optional[str] = None  # JSON string, see models.py
+    rate_breakdown_source: Optional[str] = None
     tally_status: str = "NOT_SENT"
     tally_error: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class SupplierInvoiceMatchResult(BaseModel):
+    matched: bool
+    reason: str
+    transaction: Optional[TransactionOut] = None
 
 
 class TransactionUpdate(BaseModel):

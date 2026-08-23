@@ -75,6 +75,14 @@ class Transaction(Base):
     # that happens to collide with a real one. Either way, worth a manual
     # look before approving. See _flag_duplicate_invoice() in documents.py.
     possible_duplicate = Column(Boolean, default=False)
+    gst_rate_uncertain = Column(Boolean, default=False)  # True when the source Excel doesn't cleanly determine a single GST rate (mixed-rate invoice) — the totals are still exact, only the rate label is unresolved
+    # JSON string: [{"rate": 5, "taxable_value": ..., "cgst": ..., "sgst": ..., "igst": ...}, ...]
+    # Populated only when a supplier-provided invoice Excel was matched against
+    # this transaction's GSTR-2B totals (see gstr2b/supplier_match.py). When
+    # present, the voucher builder emits one line item per rate instead of a
+    # single line at the (possibly uncertain) aggregate rate.
+    rate_breakdown = Column(Text, nullable=True)
+    rate_breakdown_source = Column(String, nullable=True)  # e.g. filename of the supplier invoice that supplied it
     # Tally push tracking: NOT_SENT | SENT | FAILED
     tally_status = Column(String, default="NOT_SENT")
     tally_error = Column(String, nullable=True)

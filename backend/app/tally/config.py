@@ -7,7 +7,7 @@ import os
 from ..paths import get_data_dir
 
 DEFAULT_CONFIG = {
-    "company_name": "Sarvotham Traders 2026-27",
+    "company_name": "",
     "sales_ledger": "Sales Account",
     "purchase_ledger": "Purchase Account",
     "output_cgst_ledger": "Output CGST",

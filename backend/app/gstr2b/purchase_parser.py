@@ -16,6 +16,42 @@ def _normalize(text) -> str:
     return re.sub(r"[₹()%\s\-/]", "", str(text)).lower()
 
 
+# Real GST slabs used in India. GSTR-2B's B2B sheet has no dedicated "GST
+# rate" column for a normal government export — the only %-labeled column
+# is "Applicable % of Tax Rate", which is ITC availability (e.g. "100%"),
+# NOT the tax rate, and must never be read as one. The true rate has to be
+# derived from tax amounts vs taxable value, then checked against this list.
+STANDARD_GST_RATES = [0, 0.25, 1, 1.5, 3, 5, 6, 7.5, 12, 13.8, 18, 28]
+RATE_MATCH_TOLERANCE = 0.15  # percentage points
+
+
+def _resolve_gst_rate(taxable_value: float, total_tax: float) -> tuple[float, bool]:
+    """Returns (gst_rate, uncertain).
+
+    If the effective rate (total_tax / taxable_value) lands within
+    RATE_MATCH_TOLERANCE of a real GST slab, that clean slab value is
+    returned with uncertain=False — this is what lets the Tally voucher
+    builder find/create a correctly-named ledger like "CGST@2.5%".
+
+    If it doesn't land near any slab, this is very likely a genuinely
+    mixed-rate invoice (common for pharma/FMCG distributors billing
+    several products at different rates on one invoice) — GSTR-2B's
+    invoice-level aggregate gives no way to recover which portion was
+    taxed at which rate from just these two numbers, so rather than guess
+    a split (multiple different splits are always mathematically
+    "valid"), the raw effective rate is returned as a label only, with
+    uncertain=True so the caller can flag it for manual review instead of
+    silently pushing a possibly-wrong rate to Tally.
+    """
+    if taxable_value <= 0:
+        return 0.0, False
+    effective = (total_tax / taxable_value) * 100
+    nearest = min(STANDARD_GST_RATES, key=lambda r: abs(r - effective))
+    if abs(nearest - effective) <= RATE_MATCH_TOLERANCE:
+        return nearest, False
+    return round(effective, 2), True
+
+
 def _merged_grid(sheet):
     grid = {}
     for r in sheet.merged_cells.ranges:
@@ -73,6 +109,7 @@ class GstrPurchaseRow:
     invoice_value: float
     taxable_value: float
     gst_rate: float
+    gst_rate_uncertain: bool
     integrated_tax: float
     central_tax: float
     state_tax: float
@@ -88,7 +125,6 @@ HEADER_VARIANTS = {
     "invoice_number": ["invoicenumber", "invoiceno"],
     "invoice_date": ["invoicedate"],
     "invoice_value": ["invoicevalue", "invoicevaluer"],
-    "gst_rate": ["rate", "ratepercent"],
     "taxable_value": ["taxablevalue", "taxablevaluer"],
     "integrated_tax": ["integratedtax", "integratedtaxr"],
     "central_tax": ["centraltax", "centraltaxr"],
@@ -152,7 +188,8 @@ def parse_gstr2b_purchase_excel(file_path: str) -> list[GstrPurchaseRow]:
                 invoice_date=_date(get("invoice_date")),
                 invoice_value=_number(get("invoice_value")),
                 taxable_value=_number(get("taxable_value")),
-                gst_rate=_number(get("gst_rate")),
+                gst_rate=0.0,
+                gst_rate_uncertain=False,
                 integrated_tax=_number(get("integrated_tax")),
                 central_tax=_number(get("central_tax")),
                 state_tax=_number(get("state_tax")),
@@ -167,9 +204,14 @@ def parse_gstr2b_purchase_excel(file_path: str) -> list[GstrPurchaseRow]:
                 item.warnings.append("Invoice value and taxable value are both zero — check manually")
 
             total_tax = item.integrated_tax + item.central_tax + item.state_tax
-            if item.gst_rate == 0 and total_tax > 0 and item.taxable_value > 0:
-                item.gst_rate = round((total_tax / item.taxable_value) * 100, 2)
-                item.warnings.append(f"Rate column missing/zero — derived {item.gst_rate}% from tax amounts")
+            item.gst_rate, item.gst_rate_uncertain = _resolve_gst_rate(item.taxable_value, total_tax)
+            if item.gst_rate_uncertain:
+                item.warnings.append(
+                    f"GST rate could not be matched to a standard slab (effective rate ≈{item.gst_rate}%) — "
+                    "this usually means the invoice has items at more than one GST rate, which this Excel "
+                    "doesn't break down. The taxable/tax totals above are exact and unchanged; only the rate "
+                    "label needs a manual check before this is pushed to Tally."
+                )
 
             expected = round(item.taxable_value + total_tax + item.cess, 2)
             if item.invoice_value and abs(expected - item.invoice_value) > 1.0:

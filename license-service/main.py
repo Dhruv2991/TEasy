@@ -57,6 +57,8 @@ try:
     with engine.connect() as conn:
         conn.execute(text("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS plan VARCHAR DEFAULT 'monthly'"))
         conn.execute(text("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS trial_reminder_sent_at TIMESTAMPTZ"))
+        conn.execute(text("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS device_fingerprint VARCHAR"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_licenses_device_fingerprint ON licenses (device_fingerprint)"))
         conn.commit()
 except Exception as e:
     print(f"[startup] Skipped column migration (likely already applied or non-Postgres DB): {e}")
@@ -194,6 +196,7 @@ def _expiry_for(lic: models.License) -> datetime | None:
 
 class TrialStartRequest(BaseModel):
     email: str
+    device_fingerprint: str | None = None
 
 
 class LicenseCheckRequest(BaseModel):
@@ -244,6 +247,36 @@ def admin_list_licenses(token: str, db: Session = Depends(get_db)):
     return {"total": len(rows), "counts": counts, "licenses": rows}
 
 
+@app.get("/admin/webhook-events")
+def admin_list_webhook_events(token: str, db: Session = Depends(get_db)):
+    """Read-only audit trail of inbound Razorpay webhooks — useful for
+    tracing "why did this license's status change" or confirming a
+    suspected duplicate delivery was actually deduped. Same shared-token
+    protection as /admin/licenses; not linked from anywhere in the app."""
+    if not ADMIN_TOKEN or token != ADMIN_TOKEN:
+        raise HTTPException(403, "Invalid or missing admin token")
+
+    events = (
+        db.query(models.WebhookEvent)
+        .order_by(models.WebhookEvent.received_at.desc())
+        .limit(200)
+        .all()
+    )
+    return {
+        "total": len(events),
+        "events": [
+            {
+                "event_type": e.event_type,
+                "subscription_id": e.subscription_id,
+                "processed": e.processed,
+                "received_at": _aware(e.received_at),
+                "event_hash": e.event_hash,
+            }
+            for e in events
+        ],
+    }
+
+
 @app.post("/trial/start")
 @limiter.limit("5/hour")
 def start_trial(request: Request, body: TrialStartRequest, db: Session = Depends(get_db)):
@@ -274,10 +307,32 @@ def start_trial(request: Request, body: TrialStartRequest, db: Session = Depends
         db.add(user)
         db.flush()
 
+    # Multi-trial-per-PC prevention: this only runs for a genuinely new
+    # user (an existing email already returned above), so at this point
+    # we're about to hand out a brand new trial. If this exact machine has
+    # already claimed a trial under a different email, refuse rather than
+    # let someone farm unlimited 7-day trials by re-registering with new
+    # addresses. Deliberately vague in the response — we don't confirm or
+    # deny whose trial it was.
+    if body.device_fingerprint:
+        existing_device = (
+            db.query(models.License)
+            .filter(models.License.device_fingerprint == body.device_fingerprint)
+            .first()
+        )
+        if existing_device:
+            raise HTTPException(
+                403,
+                "A free trial has already been used on this device. "
+                "Please subscribe to continue, or contact support if you "
+                "believe this is a mistake.",
+            )
+
     lic = models.License(
         user_id=user.id,
         status="trial",
         trial_ends_at=_now() + timedelta(days=TRIAL_DAYS),
+        device_fingerprint=body.device_fingerprint,
     )
     db.add(lic)
     db.commit()
@@ -409,10 +464,33 @@ async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
     if not hmac.compare_digest(expected, signature):
         raise HTTPException(400, "Invalid webhook signature")
 
+    # Idempotency: Razorpay redelivers webhooks (timeouts, manual redelivery
+    # from their dashboard), and re-applying an already-processed event can
+    # do real damage — e.g. a stale redelivered "halted" landing after
+    # we've already recovered would incorrectly knock a live subscription
+    # back to past_due. event_hash = sha256(raw body) is the one dedup key
+    # guaranteed unique per distinct delivery, since Razorpay doesn't
+    # reliably include its own event id across every event type.
+    event_hash = hashlib.sha256(raw_body).hexdigest()
+    already_seen = db.query(models.WebhookEvent).filter(models.WebhookEvent.event_hash == event_hash).first()
+    if already_seen:
+        return {"ok": True, "duplicate": True}
+
     payload = await request.json()
     event = payload.get("event", "")
     entity = payload.get("payload", {}).get("subscription", {}).get("entity", {})
     subscription_id = entity.get("id")
+
+    log_entry = models.WebhookEvent(
+        event_hash=event_hash,
+        event_type=event,
+        subscription_id=subscription_id,
+        payload=raw_body.decode(errors="ignore")[:20000],  # cap size, this is an audit trail not a blob store
+        processed=False,
+    )
+    db.add(log_entry)
+    db.commit()
+
     if not subscription_id:
         return {"ok": True}  # not a subscription event we care about
 
@@ -439,5 +517,6 @@ async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
     elif event == "subscription.completed":
         lic.status = "cancelled"
 
+    log_entry.processed = True
     db.commit()
     return {"ok": True}

@@ -140,6 +140,72 @@ def upload_gstr2b(file: UploadFile = File(...), db: Session = Depends(get_db)):
     db.refresh(doc)
     return doc
 
+@router.post("/supplier-invoice-match/{transaction_id}", response_model=schemas.SupplierInvoiceMatchResult)
+def match_supplier_invoice(transaction_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Upload a supplier's own invoice Excel (format varies by supplier — this
+    is NOT the GSTR-2B file) and, if its totals reconcile with the given
+    purchase transaction, resolve that transaction's real per-rate GST split.
+
+    GSTR-2B stays the source of truth for whether/how much this purchase
+    counts for ITC. The supplier file is only trusted for the rate-split
+    detail, and only after its taxable value and tax totals are checked
+    against what's already on file for this transaction. If they don't
+    reconcile, nothing is changed and the mismatch reason is returned so it
+    can be looked into manually.
+    """
+    if not file.filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(400, "Please upload the supplier's invoice as an .xlsx/.xls file.")
+
+    tx = db.query(models.Transaction).filter(models.Transaction.id == transaction_id).first()
+    if not tx:
+        raise HTTPException(404, "Transaction not found.")
+    if tx.type != "PURCHASE":
+        raise HTTPException(400, "Rate-breakdown matching only applies to Purchase transactions.")
+
+    from ..gstr2b.supplier_invoice_parser import parse_supplier_invoice_excel
+    from ..gstr2b.supplier_match import reconcile_with_transaction
+
+    ext = os.path.splitext(file.filename)[1] or ".xlsx"
+    saved_name = f"{uuid.uuid4().hex}{ext}"
+    saved_path = os.path.join(UPLOAD_DIR, saved_name)
+    with open(saved_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    try:
+        supplier_invoice = parse_supplier_invoice_excel(saved_path)
+    except ValueError as e:
+        _log(db, f"Supplier invoice '{file.filename}' could not be read: {e}", transaction_id=tx.id)
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        _log(db, f"Supplier invoice '{file.filename}' failed unexpectedly: {e}", transaction_id=tx.id)
+        raise HTTPException(500, f"Could not read this Excel file: {e}")
+
+    tx_dict = {
+        "invoice_number": tx.invoice_number,
+        "taxable_value": tx.taxable_value,
+        "cgst": tx.cgst,
+        "sgst": tx.sgst,
+        "igst": tx.igst,
+        "total_value": tx.total_value,
+    }
+    result = reconcile_with_transaction(supplier_invoice, tx_dict)
+
+    if not result.matched:
+        _log(db, f"Supplier invoice '{file.filename}' did not reconcile: {result.reason}", transaction_id=tx.id)
+        return schemas.SupplierInvoiceMatchResult(matched=False, reason=result.reason, transaction=None)
+
+    import json
+    tx.rate_breakdown = json.dumps(result.rate_breakdown)
+    tx.rate_breakdown_source = file.filename
+    tx.gst_rate_uncertain = False  # the mixed rate is now resolved into a real per-line split
+    db.commit()
+    db.refresh(tx)
+    _log(db, f"Supplier invoice '{file.filename}' matched: {result.reason}. Rate breakdown resolved "
+             f"({len(result.rate_breakdown)} rate(s)).", transaction_id=tx.id)
+
+    return schemas.SupplierInvoiceMatchResult(matched=True, reason=result.reason, transaction=tx)
+
+
 @router.post("/purchase-upload", response_model=schemas.DocumentOut)
 def upload_gstr2b_purchase(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Import Purchase invoices directly from GSTR-2B B2B Excel.
@@ -204,6 +270,7 @@ def upload_gstr2b_purchase(file: UploadFile = File(...), db: Session = Depends(g
             invoice_number=row.invoice_number,
             taxable_value=row.taxable_value,
             gst_rate=row.gst_rate,
+            gst_rate_uncertain=row.gst_rate_uncertain,
             cgst=row.central_tax,
             sgst=row.state_tax,
             igst=row.integrated_tax,

@@ -65,9 +65,16 @@ def _ledger_exists(ledgers: list[dict], name: str) -> bool:
 
 
 def _resolve_ledger_names(vch_type: str, rate: float, config: dict, ledgers: list[dict]) -> dict:
-    rate_int = int(round(rate)) if rate else 0
+    def _clean(r: float):
+        # Preserve real fractional GST rates like 2.5% (half of 5%) or 6.9%
+        # instead of rounding them to a whole number — CGST@2% is simply
+        # wrong for a 5% invoice, it must read CGST@2.5%. Only strip the
+        # decimal when the rate genuinely is a whole number (e.g. 6.0 -> 6).
+        return int(r) if r == int(r) else round(r, 2)
+
+    rate_int = _clean(rate) if rate else 0
     half_rate = rate / 2.0 if rate else 0.0
-    half_rate_int = int(round(half_rate)) if half_rate else 0
+    half_rate_int = _clean(half_rate) if half_rate else 0
 
     if vch_type.upper() in ["PURCHASE", "DEBIT NOTE"]:
         cfg_main = config.get("purchase_ledger", "Purchase Account")
@@ -177,12 +184,19 @@ def build_voucher_xml(vch_type_str: str, tx: dict, config: dict, ledgers: list[d
     rate = float(tx.get("gst_rate") or 0.0)
     if not rate and taxable > 0:
         rate = round(((cgst + sgst + igst) / taxable) * 100, 2)
-    half_rate = rate / 2.0 if rate > 0 else None
 
     calculated = taxable + cgst + sgst + igst
     diff = round(total - calculated, 2)
 
-    names = _resolve_ledger_names(vch_type_str, rate, config, ledgers)
+    # A per-rate breakdown (from a reconciled supplier invoice, see
+    # gstr2b/supplier_match.py) means this is a genuinely mixed-rate
+    # invoice: several line items at several GST rates on one bill. Tally
+    # represents that as ONE voucher with multiple main/CGST/SGST/IGST line
+    # sets -- never as several separate vouchers for a single physical bill.
+    raw_breakdown = tx.get("rate_breakdown")
+    breakdown = raw_breakdown if raw_breakdown else [
+        {"rate": rate, "taxable_value": taxable, "cgst": cgst, "sgst": sgst, "igst": igst}
+    ]
 
     # Accounting Signs (IsDeemedPositive)
     if vch_type_str.upper() in ["PURCHASE"]:
@@ -194,31 +208,44 @@ def build_voucher_xml(vch_type_str: str, tx: dict, config: dict, ledgers: list[d
 
     parent_group = "Sundry Creditors" if vch_type_str.upper() in ["PURCHASE", "DEBIT NOTE"] else "Sundry Debtors"
     main_group = "Purchase Accounts" if vch_type_str.upper() in ["PURCHASE", "DEBIT NOTE"] else "Sales Accounts"
+    round_off_ledger = config.get("round_off_ledger") or "ROUNDOFF"
 
     masters = []
-    if ledgers:
-        if not _ledger_exists(ledgers, party):
-            masters.append(_create_ledger_master_xml(party, parent_group))
-        if not _ledger_exists(ledgers, names["main"]):
-            masters.append(_create_ledger_master_xml(names["main"], main_group))
-        if cgst > 0 and not _ledger_exists(ledgers, names["cgst"]):
-            masters.append(_create_ledger_master_xml(names["cgst"], "Duties & Taxes", "Central Tax"))
-        if sgst > 0 and not _ledger_exists(ledgers, names["sgst"]):
-            masters.append(_create_ledger_master_xml(names["sgst"], "Duties & Taxes", "State Tax"))
-        if igst > 0 and not _ledger_exists(ledgers, names["igst"]):
-            masters.append(_create_ledger_master_xml(names["igst"], "Duties & Taxes", "Integrated Tax"))
-        if abs(diff) >= 0.01 and not _ledger_exists(ledgers, names["round_off"]):
-            masters.append(_create_ledger_master_xml(names["round_off"], "Indirect Expenses"))
+    entries = [_ledger_entry(party, total, is_deemed_positive=party_dp)]
+    if ledgers and not _ledger_exists(ledgers, party):
+        masters.append(_create_ledger_master_xml(party, parent_group))
 
-    entries = []
-    entries.append(_ledger_entry(party, total, is_deemed_positive=party_dp))
-    entries.append(_ledger_entry(names["main"], taxable, is_deemed_positive=main_dp))
-    if cgst:
-        entries.append(_ledger_entry(names["cgst"], cgst, is_deemed_positive=main_dp, rate_pct=half_rate))
-    if sgst:
-        entries.append(_ledger_entry(names["sgst"], sgst, is_deemed_positive=main_dp, rate_pct=half_rate))
-    if igst:
-        entries.append(_ledger_entry(names["igst"], igst, is_deemed_positive=main_dp, rate_pct=rate))
+    for part in breakdown:
+        part_rate = float(part.get("rate") or 0.0)
+        part_taxable = float(part.get("taxable_value") or 0.0)
+        part_cgst = float(part.get("cgst") or 0.0)
+        part_sgst = float(part.get("sgst") or 0.0)
+        part_igst = float(part.get("igst") or 0.0)
+        part_half_rate = part_rate / 2.0 if part_rate > 0 else None
+
+        names = _resolve_ledger_names(vch_type_str, part_rate, config, ledgers)
+
+        if ledgers:
+            if not _ledger_exists(ledgers, names["main"]):
+                masters.append(_create_ledger_master_xml(names["main"], main_group))
+            if part_cgst > 0 and not _ledger_exists(ledgers, names["cgst"]):
+                masters.append(_create_ledger_master_xml(names["cgst"], "Duties & Taxes", "Central Tax"))
+            if part_sgst > 0 and not _ledger_exists(ledgers, names["sgst"]):
+                masters.append(_create_ledger_master_xml(names["sgst"], "Duties & Taxes", "State Tax"))
+            if part_igst > 0 and not _ledger_exists(ledgers, names["igst"]):
+                masters.append(_create_ledger_master_xml(names["igst"], "Duties & Taxes", "Integrated Tax"))
+
+        entries.append(_ledger_entry(names["main"], part_taxable, is_deemed_positive=main_dp))
+        if part_cgst:
+            entries.append(_ledger_entry(names["cgst"], part_cgst, is_deemed_positive=main_dp, rate_pct=part_half_rate))
+        if part_sgst:
+            entries.append(_ledger_entry(names["sgst"], part_sgst, is_deemed_positive=main_dp, rate_pct=part_half_rate))
+        if part_igst:
+            entries.append(_ledger_entry(names["igst"], part_igst, is_deemed_positive=main_dp, rate_pct=part_rate))
+
+    if ledgers and abs(diff) >= 0.01 and not _ledger_exists(ledgers, round_off_ledger):
+        masters.append(_create_ledger_master_xml(round_off_ledger, "Indirect Expenses"))
+    names = {"round_off": round_off_ledger}
 
     # CORRECTED ROUND-OFF BALANCING
     if abs(diff) >= 0.01:

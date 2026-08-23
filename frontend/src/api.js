@@ -59,6 +59,11 @@ export const api = {
     form.append("file", file);
     return req("/gstr2b/purchase-upload", { method: "POST", body: form });
   },
+  matchSupplierInvoice: (transactionId, file) => {
+    const form = new FormData();
+    form.append("file", file);
+    return req(`/gstr2b/supplier-invoice-match/${transactionId}`, { method: "POST", body: form });
+  },
   uploadSalesExcel: (file) => {
     const form = new FormData();
     form.append("file", file);

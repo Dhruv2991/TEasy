@@ -58,6 +58,12 @@ export const Icon = {
   Chevron: (p) => (
     <svg {...base} {...p}><path d="m6 9 6 6 6-6" /></svg>
   ),
+  Search: (p) => (
+    <svg {...base} {...p}><circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+  ),
+  Download: (p) => (
+    <svg {...base} {...p}><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" /></svg>
+  ),
   Upload: (p) => (
     <svg {...base} {...p}><path d="M12 15V4" /><path d="m7 9 5-5 5 5" /><path d="M5 19h14" /></svg>
   ),

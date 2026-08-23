@@ -1,7 +1,10 @@
 """
-Local side of licensing. No hardware-locking, no device fingerprinting —
-just "does this license_key currently show as paid, according to the last
-time we could reach the license service".
+Local side of licensing. No hardware-locking a paid license — a license_key
+works on any machine. The one exception is starting a NEW trial, which also
+sends a device fingerprint so the license service can refuse to hand out a
+second free trial to the same physical machine under a different email;
+everything else here is just "does this license_key currently show as paid,
+according to the last time we could reach the license service".
 
 Why cache at all: this app has to keep working on a laptop with no wifi for
 a few days. So every successful online check is written to
@@ -20,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from ..paths import get_data_dir
+from .fingerprint import get_device_fingerprint
 
 LICENSE_SERVICE_URL = os.environ.get("TEASY_LICENSE_SERVICE_URL", "https://teasy-vusw.onrender.com")
 GRACE_DAYS = int(os.environ.get("TEASY_LICENSE_GRACE_DAYS", "5"))
@@ -81,7 +85,7 @@ def start_trial(email: str) -> dict:
     """
     resp = requests.post(
         f"{LICENSE_SERVICE_URL}/trial/start",
-        json={"email": email},
+        json={"email": email, "device_fingerprint": get_device_fingerprint()},
         timeout=REQUEST_TIMEOUT,
     )
     resp.raise_for_status()
