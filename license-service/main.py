@@ -23,6 +23,7 @@ URL (Railway and Render both work off a single `git push`). Do NOT deploy
 this as a Vercel serverless function without an external Postgres (Neon
 works fine) - Vercel functions have no local disk to keep SQLite in.
 """
+import asyncio
 import hashlib
 import hmac
 import os
@@ -32,6 +33,9 @@ import razorpay
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -40,7 +44,7 @@ load_dotenv()
 
 import mailer
 import models
-from database import Base, engine, get_db
+from database import Base, SessionLocal, engine, get_db
 
 Base.metadata.create_all(bind=engine)
 
@@ -52,9 +56,10 @@ Base.metadata.create_all(bind=engine)
 try:
     with engine.connect() as conn:
         conn.execute(text("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS plan VARCHAR DEFAULT 'monthly'"))
+        conn.execute(text("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS trial_reminder_sent_at TIMESTAMPTZ"))
         conn.commit()
 except Exception as e:
-    print(f"[startup] Skipped 'plan' column migration (likely already applied or non-Postgres DB): {e}")
+    print(f"[startup] Skipped column migration (likely already applied or non-Postgres DB): {e}")
 
 TRIAL_DAYS = int(os.environ.get("TRIAL_DAYS", "7"))
 GRACE_DAYS = int(os.environ.get("GRACE_DAYS", "5"))
@@ -89,6 +94,14 @@ rzp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)) if RAZ
 
 app = FastAPI(title="TEasy License Service")
 
+# Per-IP rate limits — mainly to stop /trial/start from being used to spam
+# the "already registered" email at someone's inbox, and to stop
+# /license/check from being hammered. Generous enough that a real user
+# hitting "start trial" a couple of times by mistake never sees this.
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Locked down to the landing page + the desktop app's local calls happen
 # server-to-server from the user's own machine (not a browser), so this can
 # stay narrow. Set ALLOWED_ORIGINS in your deploy environment.
@@ -98,6 +111,58 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _send_trial_reminders_once():
+    """Emails anyone whose trial ends in the next 2 days and hasn't already
+    been reminded. Runs inside the same process on a loop (see
+    _reminder_loop below) rather than as a separate cron job, since Render's
+    free/hobby tiers don't include a cron product — this keeps deployment
+    to a single service. Caveat: if this service spins down from
+    inactivity (free tier), the loop pauses until the next request wakes
+    it — acceptable for a reminder email, not acceptable for anything
+    time-critical.
+    """
+    db = SessionLocal()
+    try:
+        window_start = _now()
+        window_end = _now() + timedelta(days=2)
+        candidates = (
+            db.query(models.License)
+            .filter(
+                models.License.status == "trial",
+                models.License.trial_ends_at.isnot(None),
+                models.License.trial_ends_at > window_start,
+                models.License.trial_ends_at <= window_end,
+                models.License.trial_reminder_sent_at.is_(None),
+            )
+            .all()
+        )
+        for lic in candidates:
+            if not lic.user:
+                continue
+            days_left = max(1, (_aware(lic.trial_ends_at) - _now()).days + 1)
+            if mailer.send_trial_ending_soon(lic.user.email, days_left, _aware(lic.trial_ends_at)):
+                lic.trial_reminder_sent_at = _now()
+                db.commit()
+    finally:
+        db.close()
+
+
+async def _reminder_loop():
+    # Small delay on startup so this doesn't compete with the app coming up.
+    await asyncio.sleep(30)
+    while True:
+        try:
+            _send_trial_reminders_once()
+        except Exception as e:
+            print(f"[reminders] Skipped a run due to error: {e}")
+        await asyncio.sleep(6 * 60 * 60)  # every 6 hours — frequent enough that "2 days out" is never missed by more than a few hours
+
+
+@app.on_event("startup")
+async def _start_background_jobs():
+    asyncio.create_task(_reminder_loop())
 
 
 def _now():
@@ -145,8 +210,43 @@ def health():
     return {"status": "ok"}
 
 
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
+
+
+@app.get("/admin/licenses")
+def admin_list_licenses(token: str, db: Session = Depends(get_db)):
+    """Simple read-only overview so you don't need pgAdmin open just to see
+    who's trialing, who's paying, and who's about to churn. Protected by a
+    single shared token (set ADMIN_TOKEN on Render) rather than real auth —
+    fine for one-person access, treat the URL like a password and don't
+    share it. Not linked from anywhere in the app; you hit it directly."""
+    if not ADMIN_TOKEN or token != ADMIN_TOKEN:
+        raise HTTPException(403, "Invalid or missing admin token")
+
+    licenses = db.query(models.License).order_by(models.License.created_at.desc()).limit(500).all()
+    rows = []
+    for lic in licenses:
+        rows.append({
+            "email": lic.user.email if lic.user else None,
+            "status": lic.status,
+            "plan": lic.plan,
+            "license_key": lic.license_key,
+            "trial_ends_at": _aware(lic.trial_ends_at),
+            "current_period_end": _aware(lic.current_period_end),
+            "valid_now": _license_is_valid(lic),
+            "created_at": _aware(lic.created_at),
+        })
+
+    counts = {"trial": 0, "active": 0, "past_due": 0, "cancelled": 0, "expired": 0}
+    for r in rows:
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+
+    return {"total": len(rows), "counts": counts, "licenses": rows}
+
+
 @app.post("/trial/start")
-def start_trial(body: TrialStartRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/hour")
+def start_trial(request: Request, body: TrialStartRequest, db: Session = Depends(get_db)):
     email = body.email.strip().lower()
     if not email or "@" not in email:
         raise HTTPException(400, "Enter a valid email")
@@ -194,7 +294,8 @@ def start_trial(body: TrialStartRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/license/check")
-def check_license(body: LicenseCheckRequest, db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+def check_license(request: Request, body: LicenseCheckRequest, db: Session = Depends(get_db)):
     lic = db.query(models.License).filter(models.License.license_key == body.license_key).first()
     if not lic:
         raise HTTPException(404, "Unknown license key")
@@ -251,6 +352,48 @@ def create_subscription(body: CreateSubscriptionRequest, db: Session = Depends(g
     return {"short_url": subscription["short_url"], "subscription_id": subscription["id"]}
 
 
+class CancelSubscriptionRequest(BaseModel):
+    license_key: str
+
+
+@app.post("/billing/cancel-subscription")
+def cancel_subscription(body: CancelSubscriptionRequest, db: Session = Depends(get_db)):
+    """Lets the app or landing page cancel a subscription without going
+    through the Razorpay dashboard. Mirrors what already happens when a
+    customer cancels their UPI mandate directly — the license stays valid
+    through whatever period they already paid for (current_period_end),
+    it just won't auto-renew. The webhook (subscription.cancelled) will
+    also fire and re-confirm this, so this is safe to call even if the
+    webhook is briefly delayed."""
+    lic = db.query(models.License).filter(models.License.license_key == body.license_key).first()
+    if not lic:
+        raise HTTPException(404, "Unknown license key")
+
+    if not lic.razorpay_subscription_id:
+        raise HTTPException(400, "This license has no active subscription to cancel.")
+
+    if lic.status == "cancelled":
+        return {"status": "cancelled", "current_period_end": _aware(lic.current_period_end)}
+
+    if not rzp_client:
+        raise HTTPException(500, "Billing isn't configured on the server")
+
+    try:
+        # cancel_at_cycle_end=1: don't yank access immediately, let it run
+        # out the period they already paid for — matches how a bank-side
+        # mandate cancellation behaves, and what the refund policy promises.
+        rzp_client.subscription.cancel(lic.razorpay_subscription_id, {"cancel_at_cycle_end": 1})
+    except Exception as e:
+        raise HTTPException(502, f"Razorpay couldn't cancel this subscription: {e}")
+
+    lic.status = "cancelled"
+    db.commit()
+
+    mailer.send_subscription_cancelled(lic.user.email if lic.user else None, _aware(lic.current_period_end))
+
+    return {"status": "cancelled", "current_period_end": _aware(lic.current_period_end)}
+
+
 @app.post("/billing/webhook")
 async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
     raw_body = await request.body()
@@ -287,7 +430,12 @@ async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
     elif event == "subscription.cancelled":
         lic.status = "cancelled"  # stays valid until current_period_end (already set from last charge)
     elif event in ("subscription.halted", "subscription.pending"):
+        was_already_past_due = lic.status == "past_due"
         lic.status = "past_due"
+        if not was_already_past_due and lic.user:
+            # Only email on the transition into past_due, not every retry
+            # webhook Razorpay might send for the same ongoing failure.
+            mailer.send_payment_failed(lic.user.email, _aware(lic.current_period_end))
     elif event == "subscription.completed":
         lic.status = "cancelled"
 

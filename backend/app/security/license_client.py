@@ -194,3 +194,27 @@ def is_valid_fast() -> bool:
     latency or load to every click in the app.
     """
     return _status_from_cache_only(_load_cache()).get("valid", False)
+
+
+def cancel_subscription() -> dict:
+    """Cancels auto-renewal on whatever license_key is currently active.
+    Access continues until the period already paid for ends — same
+    behavior as cancelling directly in Razorpay's dashboard, just
+    reachable from inside the app."""
+    license_key = get_license_key()
+    if not license_key:
+        raise RuntimeError("No license is currently activated.")
+
+    resp = requests.post(
+        f"{LICENSE_SERVICE_URL}/billing/cancel-subscription",
+        json={"license_key": license_key},
+        timeout=REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    # Refresh the cache immediately so the UI reflects "cancelled" without
+    # waiting for the next scheduled check.
+    cache = _load_cache()
+    cache["status"] = data.get("status")
+    _save_cache(cache)
+    return data

@@ -74,7 +74,58 @@ def send_trial_welcome(to_email: str, license_key: str, trial_days: int, expires
     return _send(to_email, subject, html)
 
 
-def send_already_registered(to_email: str, license_key: str, status: str, expires_at) -> bool:
+def send_subscription_cancelled(to_email: str | None, valid_until) -> bool:
+    if not to_email:
+        return False
+    subject = "Your TEasy subscription is cancelled"
+    valid_str = valid_until.strftime("%d %b %Y") if valid_until else None
+    access_line = (
+        f"You'll keep full access until <b>{valid_str}</b> — the period you already paid for — then it will end."
+        if valid_str
+        else "Your access has ended."
+    )
+    html = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+      <h2 style="color: #7c3aed;">Your subscription is cancelled</h2>
+      <p>We've cancelled auto-renewal on your TEasy subscription, as requested.</p>
+      <p>{access_line}</p>
+      <p>Changed your mind? You can resubscribe anytime from inside TEasy or on our website.</p>
+      <p style="color: #64748b; font-size: 13px; margin-top: 32px;">
+        Didn't request this? Contact us right away at ddhruvgnayak@gmail.com.
+      </p>
+    </div>
+    """
+    return _send(to_email, subject, html)
+
+
+def send_trial_ending_soon(to_email: str, days_left: int, expires_at) -> bool:
+    subject = f"Your TEasy trial ends in {days_left} day{'s' if days_left != 1 else ''}"
+    expires_str = expires_at.strftime("%d %b %Y") if expires_at else ""
+    html = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+      <h2 style="color: #7c3aed;">Your trial ends soon</h2>
+      <p>Your TEasy free trial ends in <b>{days_left} day{'s' if days_left != 1 else ''}</b>{f" (on {expires_str})" if expires_str else ""}.</p>
+      <p>To keep using TEasy without interruption, subscribe from inside the app or from our website — it takes under a minute.</p>
+      <p style="color: #64748b; font-size: 13px; margin-top: 32px;">
+        Not planning to continue? No action needed — the app will simply stop unlocking after your trial ends.
+      </p>
+    </div>
+    """
+    return _send(to_email, subject, html)
+
+
+def send_payment_failed(to_email: str, retry_by) -> bool:
+    subject = "TEasy: your last payment didn't go through"
+    retry_str = retry_by.strftime("%d %b %Y") if retry_by else None
+    html = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+      <h2 style="color: #b3402b;">Payment didn't go through</h2>
+      <p>Your last TEasy subscription charge failed — this usually means your card/UPI mandate needs updating.</p>
+      <p>{f"Please update your payment method before <b>{retry_str}</b> to avoid losing access." if retry_str else "Please update your payment method to avoid losing access."}</p>
+      <p>You can update or retry payment from inside TEasy, or by contacting us at ddhruvgnayak@gmail.com.</p>
+    </div>
+    """
+    return _send(to_email, subject, html)
     subject = "You already have a TEasy license"
     expires_str = expires_at.strftime("%d %b %Y") if expires_at else ""
     if status == "trial":

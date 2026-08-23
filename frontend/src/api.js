@@ -36,7 +36,9 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ license_key }),
     }),
-  createSubscription: () => req("/api/license/create-subscription", { method: "POST" }),
+  createSubscription: (plan = "monthly") =>
+    req(`/api/license/create-subscription?plan=${encodeURIComponent(plan)}`, { method: "POST" }),
+  cancelSubscription: () => req("/api/license/cancel-subscription", { method: "POST" }),
 
   listDocuments: () => req("/documents"),
   getDocument: (id) => req(`/documents/${id}`),

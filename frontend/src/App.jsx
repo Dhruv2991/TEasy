@@ -14,6 +14,7 @@ import ReportsPage from "./ReportsPage.jsx";
 import GstSettingsPage from "./GstSettingsPage.jsx";
 import PartiesPage from "./PartiesPage.jsx";
 import GeneralSettingsPage from "./GeneralSettingsPage.jsx";
+import AccountBillingPage from "./AccountBillingPage.jsx";
 import FirstRunSetup from "./FirstRunSetup.jsx";
 import LicenseGate from "./LicenseGate.jsx";
 import BankStatementPage from "./BankStatementPage.jsx";
@@ -33,6 +34,7 @@ const PAGE_META = {
   parties: { title: "Parties & Ledgers", subtitle: "" },
   "gst-settings": { title: "GST Settings", subtitle: "" },
   users: { title: "Users", subtitle: "" },
+  "account-billing": { title: "Account & Billing", subtitle: "Manage your TEasy plan" },
   "general-settings": { title: "General Settings", subtitle: "" },
 };
 
@@ -142,6 +144,8 @@ export default function App() {
         return <GstSettingsPage />;
       case "users":
         return <ComingSoonPage title="Users" description="This is currently a single-user local app — multi-user accounts aren't built yet." />;
+      case "account-billing":
+        return <AccountBillingPage />;
       case "general-settings":
         return <GeneralSettingsPage />;
       default:

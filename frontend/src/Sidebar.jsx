@@ -24,6 +24,7 @@ const SETTINGS_ITEMS = [
   { key: "parties", label: "Parties & Ledgers", icon: Icon.Parties },
   { key: "gst-settings", label: "GST Settings", icon: Icon.Percent },
   { key: "users", label: "Users", icon: Icon.User },
+  { key: "account-billing", label: "Account & Billing", icon: Icon.Reports },
   { key: "general-settings", label: "General Settings", icon: Icon.Settings },
 ];
 

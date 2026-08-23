@@ -44,17 +44,27 @@ def activate(body: ActivateRequest):
 
 
 @router.post("/create-subscription")
-def create_subscription():
+def create_subscription(plan: str = "monthly"):
     key = license_client.get_license_key()
     if not key:
         raise HTTPException(400, "Start a trial or activate a license first")
     try:
         resp = requests.post(
             f"{license_client.LICENSE_SERVICE_URL}/billing/create-subscription",
-            json={"license_key": key},
+            json={"license_key": key, "plan": plan},
             timeout=10,
         )
         resp.raise_for_status()
         return resp.json()
     except requests.RequestException:
         raise HTTPException(503, "Couldn't reach the billing server — check your internet connection and try again")
+
+
+@router.post("/cancel-subscription")
+def cancel_subscription():
+    try:
+        return license_client.cancel_subscription()
+    except requests.RequestException:
+        raise HTTPException(503, "Couldn't reach the billing server — check your internet connection and try again")
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))

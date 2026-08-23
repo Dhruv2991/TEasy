@@ -49,6 +49,7 @@ class License(Base):
 
     razorpay_subscription_id = Column(String, nullable=True)
     plan = Column(String, nullable=True, default="monthly")  # "monthly" or "yearly" — set once they actually subscribe; null during trial
+    trial_reminder_sent_at = Column(DateTime(timezone=True), nullable=True)  # so the daily reminder job doesn't email the same person twice
 
     created_at = Column(DateTime(timezone=True), default=_now)
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)
