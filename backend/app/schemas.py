@@ -23,6 +23,10 @@ class TransactionOut(BaseModel):
     manually_reviewed: bool = False
     rate_breakdown: Optional[str] = None  # JSON string, see models.py
     rate_breakdown_source: Optional[str] = None
+    debit: float = 0.0
+    credit: float = 0.0
+    narration: Optional[str] = None
+    approved_at: Optional[datetime.datetime] = None
     tally_status: str = "NOT_SENT"
     tally_error: Optional[str] = None
 
@@ -66,6 +70,24 @@ class TransactionUpdate(BaseModel):
     cess: Optional[float] = None
     total_value: Optional[float] = None
     status: Optional[str] = None
+    debit: Optional[float] = None
+    credit: Optional[float] = None
+    narration: Optional[str] = None
+
+
+class PushToTallyRequest(BaseModel):
+    # Restrict the push to one voucher type (e.g. push only "BANK" rows).
+    # Leave unset to push every approved, not-yet-sent transaction across
+    # all types — still grouped by type so Tally receives clean batches
+    # (see routers/tally.py).
+    type: Optional[str] = None
+    # Explicit transaction id order to push in — e.g. whatever order the
+    # user currently has the Review & Approve table sorted by. When given,
+    # only these ids are pushed (still requires APPROVED + not yet SENT),
+    # in exactly this sequence, and `type` is ignored. When omitted, the
+    # default order is: grouped by type, then by approval order
+    # (approved_at) within each type.
+    order: Optional[List[int]] = None
 
 
 class BillOut(BaseModel):

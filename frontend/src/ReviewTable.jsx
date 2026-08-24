@@ -55,6 +55,8 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
 
   if (!tx) return null;
 
+  const isBank = tx.type === "BANK";
+
   const startEdit = () => {
     setForm({ ...tx, date: toIsoDate(tx.date) });
     setEditing(true);
@@ -93,6 +95,19 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
     }));
   };
 
+  // Bank rows have no GST/rate math to keep in sync — debit and credit are
+  // mutually exclusive sides of the same journal entry, and total_value is
+  // just whichever one is non-zero (used for CSV export / totals display).
+  const handleDebitChange = (value) => {
+    const debit = parseFloat(value) || 0;
+    setForm((f) => ({ ...f, debit, credit: 0, total_value: debit }));
+  };
+
+  const handleCreditChange = (value) => {
+    const credit = parseFloat(value) || 0;
+    setForm((f) => ({ ...f, credit, debit: 0, total_value: credit }));
+  };
+
   const save = async () => {
     setBusy(true);
     try {
@@ -125,8 +140,9 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
     (Number(form.sgst) || 0) +
     (Number(form.igst) || 0);
   const computedTotal = roundRupee((Number(form.taxable_value) || 0) + taxSum);
-  const reconciled =
-    Math.abs(computedTotal - (Number(form.total_value) || 0)) <= 1.5;
+  const reconciled = isBank
+    ? true // a bank row's "total" is just debit or credit itself — nothing to reconcile against
+    : Math.abs(computedTotal - (Number(form.total_value) || 0)) <= 1.5;
 
   return (
     <tr className="border-b border-slate-100 hover:bg-slate-50/60">
@@ -162,6 +178,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
               className="border border-slate-300 rounded px-2 py-1 text-sm w-32"
               value={form.party || ""}
               onChange={(e) => setForm({ ...form, party: e.target.value })}
+              placeholder={isBank ? "Counter-party ledger" : ""}
             />
           </td>
           <td className="p-3">
@@ -177,42 +194,79 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             <input
               type="text"
               className="border border-slate-300 rounded px-2 py-1 text-sm w-24"
-              value={form.invoice_number || ""}
+              value={(isBank ? form.invoice_number : form.invoice_number) || ""}
               onChange={(e) =>
                 setForm({ ...form, invoice_number: e.target.value })
               }
+              placeholder={isBank ? "Chq/Ref no" : ""}
             />
           </td>
-          <td className="p-3">
-            <div className="text-[10px] text-slate-400 mb-0.5">Taxable value</div>
-            <input
-              type="number"
-              className="border border-slate-300 rounded px-2 py-1 text-sm w-24"
-              value={form.taxable_value ?? 0}
-              onChange={(e) => handleTaxableChange(e.target.value)}
-            />
-          </td>
-          <td className="p-3">
-            <div className="text-[10px] text-slate-400 mb-0.5">GST % → Total</div>
-            <input
-              type="number"
-              className="border border-slate-300 rounded px-2 py-1 text-sm w-16"
-              value={form.gst_rate ?? 0}
-              onChange={(e) => handleRateChange(e.target.value)}
-            />
-            <div className="text-sm font-medium text-slate-900 mt-1">
-              ₹{formatMoney(computedTotal)}
-            </div>
-            <div
-              className={`text-[10px] ${
-                reconciled ? "text-emerald-600" : "text-rose-600"
-              }`}
-            >
-              {reconciled
-                ? "Balances ✓"
-                : `≠ saved total (₹${formatMoney(form.total_value)})`}
-            </div>
-          </td>
+          {isBank ? (
+            <td className="p-3">
+              <div className="flex gap-2">
+                <div>
+                  <div className="text-[10px] text-slate-400 mb-0.5">Debit (₹)</div>
+                  <input
+                    type="number"
+                    className="border border-slate-300 rounded px-2 py-1 text-sm w-20"
+                    value={form.debit || 0}
+                    onChange={(e) => handleDebitChange(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <div className="text-[10px] text-slate-400 mb-0.5">Credit (₹)</div>
+                  <input
+                    type="number"
+                    className="border border-slate-300 rounded px-2 py-1 text-sm w-20"
+                    value={form.credit || 0}
+                    onChange={(e) => handleCreditChange(e.target.value)}
+                  />
+                </div>
+              </div>
+              <input
+                type="text"
+                className="mt-1.5 border border-slate-300 rounded px-2 py-1 text-xs w-full"
+                value={form.narration || ""}
+                onChange={(e) => setForm({ ...form, narration: e.target.value })}
+                placeholder="Narration"
+              />
+            </td>
+          ) : (
+            <td className="p-3">
+              <div className="text-[10px] text-slate-400 mb-0.5">Taxable value</div>
+              <input
+                type="number"
+                className="border border-slate-300 rounded px-2 py-1 text-sm w-24"
+                value={form.taxable_value ?? 0}
+                onChange={(e) => handleTaxableChange(e.target.value)}
+              />
+            </td>
+          )}
+          {isBank ? (
+            <td className="p-3 text-sm text-slate-400">—</td>
+          ) : (
+            <td className="p-3">
+              <div className="text-[10px] text-slate-400 mb-0.5">GST % → Total</div>
+              <input
+                type="number"
+                className="border border-slate-300 rounded px-2 py-1 text-sm w-16"
+                value={form.gst_rate ?? 0}
+                onChange={(e) => handleRateChange(e.target.value)}
+              />
+              <div className="text-sm font-medium text-slate-900 mt-1">
+                ₹{formatMoney(computedTotal)}
+              </div>
+              <div
+                className={`text-[10px] ${
+                  reconciled ? "text-emerald-600" : "text-rose-600"
+                }`}
+              >
+                {reconciled
+                  ? "Balances ✓"
+                  : `≠ saved total (₹${formatMoney(form.total_value)})`}
+              </div>
+            </td>
+          )}
         </>
       ) : (
         <>
@@ -226,26 +280,47 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
               </span>
             )}
           </td>
-          <td className="p-3 text-sm font-medium text-slate-900">
-            ₹{formatMoney(tx.total_value)}
-          </td>
+          {isBank ? (
+            <td className="p-3 text-sm">
+              {tx.credit > 0 ? (
+                <span className="font-medium text-emerald-700">Cr ₹{formatMoney(tx.credit)}</span>
+              ) : (
+                <span className="font-medium text-rose-700">Dr ₹{formatMoney(tx.debit)}</span>
+              )}
+              {tx.narration && (
+                <div className="text-[10px] text-slate-400 max-w-[160px] truncate" title={tx.narration}>
+                  {tx.narration}
+                </div>
+              )}
+            </td>
+          ) : (
+            <td className="p-3 text-sm font-medium text-slate-900">
+              ₹{formatMoney(tx.total_value)}
+            </td>
+          )}
           <td className="p-3 text-sm text-slate-600">
-            {tx.gst_rate}%
-            {tx.gst_rate_uncertain && !tx.rate_breakdown && (
-              <span
-                className="ml-1.5 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded"
-                title="This Excel doesn't break the invoice down by rate — likely a mixed-rate invoice (multiple GST slabs on one bill)."
-              >
-                RATE UNCERTAIN
-              </span>
-            )}
-            {tx.rate_breakdown && (
-              <span
-                className="ml-1.5 text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded"
-                title={`Resolved from supplier invoice '${tx.rate_breakdown_source || ""}'`}
-              >
-                RATE SPLIT RESOLVED
-              </span>
+            {isBank ? (
+              <span className="text-slate-400">—</span>
+            ) : (
+              <>
+                {tx.gst_rate}%
+                {tx.gst_rate_uncertain && !tx.rate_breakdown && (
+                  <span
+                    className="ml-1.5 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded"
+                    title="This Excel doesn't break the invoice down by rate — likely a mixed-rate invoice (multiple GST slabs on one bill)."
+                  >
+                    RATE UNCERTAIN
+                  </span>
+                )}
+                {tx.rate_breakdown && (
+                  <span
+                    className="ml-1.5 text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded"
+                    title={`Resolved from supplier invoice '${tx.rate_breakdown_source || ""}'`}
+                  >
+                    RATE SPLIT RESOLVED
+                  </span>
+                )}
+              </>
             )}
           </td>
         </>
@@ -333,6 +408,9 @@ function downloadCsv(rows, filename) {
     "IGST",
     "Total",
     "GST %",
+    "Debit",
+    "Credit",
+    "Narration",
     "Confidence",
     "Status",
     "Tally Status",
@@ -355,6 +433,9 @@ function downloadCsv(rows, filename) {
         tx.igst,
         tx.total_value,
         tx.gst_rate,
+        tx.debit,
+        tx.credit,
+        tx.narration,
         tx.confidence != null ? Math.round(tx.confidence * 100) + "%" : "",
         tx.status,
         tx.tally_status,
@@ -382,6 +463,8 @@ export default function ReviewTable({ bills, onChanged }) {
   const [sortDir, setSortDir] = useState("asc");
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushResults, setPushResults] = useState([]);
 
   if (!bills.length) {
     return (
@@ -390,6 +473,8 @@ export default function ReviewTable({ bills, onChanged }) {
       </div>
     );
   }
+
+  const isBankTable = bills.some((b) => b.transaction?.type === "BANK");
 
   const statusesPresent = Array.from(
     new Set(bills.map((b) => b.transaction?.status).filter(Boolean))
@@ -438,9 +523,11 @@ export default function ReviewTable({ bills, onChanged }) {
       acc.sgst += Number(tx.sgst) || 0;
       acc.igst += Number(tx.igst) || 0;
       acc.total += Number(tx.total_value) || 0;
+      acc.debit += Number(tx.debit) || 0;
+      acc.credit += Number(tx.credit) || 0;
       return acc;
     },
-    { taxable: 0, cgst: 0, sgst: 0, igst: 0, total: 0 }
+    { taxable: 0, cgst: 0, sgst: 0, igst: 0, total: 0, debit: 0, credit: 0 }
   );
 
   const toggleSort = (key) => {
@@ -543,6 +630,31 @@ export default function ReviewTable({ bills, onChanged }) {
     }
   };
 
+  // Pushes every APPROVED-and-not-yet-sent row currently visible in this
+  // table, in EXACTLY the order it's displayed right now — i.e. whatever
+  // the user has this page sorted/filtered by. That's what keeps a
+  // multi-voucher push clean and predictable in Tally instead of an
+  // unrelated global order.
+  const pushableIds = sortedBills
+    .map((b) => b.transaction)
+    .filter((tx) => tx && tx.status === "APPROVED" && tx.tally_status !== "SENT")
+    .map((tx) => tx.id);
+
+  const handlePushInOrder = async () => {
+    if (!pushableIds.length) return;
+    setPushBusy(true);
+    setPushResults([]);
+    try {
+      const results = await api.pushToTally({ order: pushableIds });
+      setPushResults(results);
+      onChanged();
+    } catch (e) {
+      alert(`Push failed: ${e.message}`);
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-3">
       {/* Search / Filter / Export Toolbar */}
@@ -622,8 +734,29 @@ export default function ReviewTable({ bills, onChanged }) {
           >
             Delete Selected
           </button>
+          <button
+            disabled={!pushableIds.length || pushBusy}
+            onClick={handlePushInOrder}
+            title="Pushes approved rows to Tally in exactly the order shown below (respects your current sort/filter)"
+            className="bg-indigo-600 text-white text-xs font-medium px-3 py-1.5 rounded-lg hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+          >
+            {pushBusy ? "Pushing…" : `Push ${pushableIds.length} to Tally (this order)`}
+          </button>
         </div>
       </div>
+
+      {pushResults.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-1 text-sm">
+          {pushResults.map((r) => (
+            <div
+              key={r.transaction_id}
+              className={`px-3 py-1.5 rounded-lg ${r.status === "SENT" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}
+            >
+              Transaction #{r.transaction_id}: {r.status} — {r.message}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Table */}
       <div className="overflow-x-auto bg-white rounded-xl border border-slate-200">
@@ -639,11 +772,11 @@ export default function ReviewTable({ bills, onChanged }) {
                 />
               </th>
               <th className="p-3">Bill</th>
-              <SortHeader colKey="party">Party</SortHeader>
+              <SortHeader colKey="party">{isBankTable ? "Counter-party" : "Party"}</SortHeader>
               <SortHeader colKey="date">Date</SortHeader>
-              <SortHeader colKey="invoice_number">Invoice #</SortHeader>
-              <SortHeader colKey="total_value">Total</SortHeader>
-              <SortHeader colKey="gst_rate">GST %</SortHeader>
+              <SortHeader colKey="invoice_number">{isBankTable ? "Chq/Ref #" : "Invoice #"}</SortHeader>
+              <SortHeader colKey="total_value">{isBankTable ? "Debit / Credit" : "Total"}</SortHeader>
+              <SortHeader colKey="gst_rate">{isBankTable ? "—" : "GST %"}</SortHeader>
               <SortHeader colKey="confidence">Confidence</SortHeader>
               <SortHeader colKey="status">Status</SortHeader>
               <th className="p-3">Tally</th>
@@ -667,16 +800,29 @@ export default function ReviewTable({ bills, onChanged }) {
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-slate-200 bg-slate-50 text-sm font-semibold text-slate-700">
-              <td className="p-3" colSpan={5}>
-                Totals ({sortedBills.length} row{sortedBills.length === 1 ? "" : "s"})
-                <span className="ml-2 text-xs text-slate-500 font-normal">
-                  Taxable ₹{formatMoney(totals.taxable)}
-                </span>
-              </td>
-              <td className="p-3">₹{formatMoney(totals.total)}</td>
-              <td className="p-3 text-xs text-slate-500 font-normal" colSpan={4}>
-                CGST ₹{formatMoney(totals.cgst)} · SGST ₹{formatMoney(totals.sgst)} · IGST ₹{formatMoney(totals.igst)}
-              </td>
+              {isBankTable ? (
+                <>
+                  <td className="p-3" colSpan={5}>
+                    Totals ({sortedBills.length} row{sortedBills.length === 1 ? "" : "s"})
+                  </td>
+                  <td className="p-3 text-xs text-slate-500 font-normal" colSpan={5}>
+                    Debit ₹{formatMoney(totals.debit)} · Credit ₹{formatMoney(totals.credit)}
+                  </td>
+                </>
+              ) : (
+                <>
+                  <td className="p-3" colSpan={5}>
+                    Totals ({sortedBills.length} row{sortedBills.length === 1 ? "" : "s"})
+                    <span className="ml-2 text-xs text-slate-500 font-normal">
+                      Taxable ₹{formatMoney(totals.taxable)}
+                    </span>
+                  </td>
+                  <td className="p-3">₹{formatMoney(totals.total)}</td>
+                  <td className="p-3 text-xs text-slate-500 font-normal" colSpan={4}>
+                    CGST ₹{formatMoney(totals.cgst)} · SGST ₹{formatMoney(totals.sgst)} · IGST ₹{formatMoney(totals.igst)}
+                  </td>
+                </>
+              )}
               <td className="p-3"></td>
             </tr>
           </tfoot>

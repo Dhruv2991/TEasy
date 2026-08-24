@@ -91,6 +91,20 @@ class Transaction(Base):
     # single line at the (possibly uncertain) aggregate rate.
     rate_breakdown = Column(Text, nullable=True)
     rate_breakdown_source = Column(String, nullable=True)  # e.g. filename of the supplier invoice that supplied it
+    # Bank-statement-specific fields (type == "BANK"). GST/taxable fields
+    # above are left at 0 for these — a bank entry is a plain ledger-to-ledger
+    # movement, never a taxed sale/purchase line. Exactly one of debit/credit
+    # is non-zero per row, mirroring the statement itself.
+    debit = Column(Float, default=0.0)
+    credit = Column(Float, default=0.0)
+    narration = Column(Text, nullable=True)
+    # Timestamp set the moment a transaction is approved (single or bulk).
+    # Used as the default "approved order" when pushing to Tally — pushing
+    # in the order things were actually approved is a more meaningful
+    # default than raw row-insertion order, and gives every voucher type a
+    # stable, explainable sequence when the user hasn't asked for a
+    # specific sort order themselves.
+    approved_at = Column(DateTime, nullable=True)
     # Tally push tracking: NOT_SENT | SENT | FAILED
     tally_status = Column(String, default="NOT_SENT")
     tally_error = Column(String, nullable=True)

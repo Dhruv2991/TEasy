@@ -3,13 +3,14 @@ FastAPI Router for Tally operations, database transaction sync, and configuratio
 """
 
 import json
+from datetime import datetime
 from typing import Any, Dict
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from .. import models
+from .. import models, schemas
 from ..tally.config import get_tally_config, save_tally_config
 from ..tally.voucher_builder import build_voucher_envelope, MissingVoucherDateError
 from ..tally.tally_client import (
@@ -63,11 +64,14 @@ def get_ledgers(force_refresh: bool = False):
 
 @router.post("/push", response_model=list[PushResult])
 def push_approved_transactions(
-    payload: Any = Body(default=None),
+    payload: schemas.PushToTallyRequest | None = Body(default=None),
     db: Session = Depends(get_db)
 ):
     config = get_tally_config()
 
+    # Legacy direct-voucher path: a raw voucher dict with no transaction_id,
+    # used by a couple of older callers to push one ad-hoc voucher without a
+    # DB-backed transaction at all. Left untouched.
     if payload and isinstance(payload, dict) and "type" in payload and "transaction_id" not in payload:
         try:
             xml = build_voucher_envelope(payload, config)
@@ -81,20 +85,43 @@ def push_approved_transactions(
         except Exception as e:
             return [PushResult(transaction_id=0, status="FAILED", message=str(e))]
 
-    pending = (
-        db.query(models.Transaction)
-        .filter(
-            models.Transaction.status == "APPROVED",
-            models.Transaction.tally_status != "SENT",
-        )
-        # Push in a stable, predictable order (chronological by invoice
-        # date, then insertion order as a tiebreaker) instead of whatever
-        # order Postgres happens to return — undefined order made it
-        # impossible to reason about "what got pushed in what sequence"
-        # when reviewing results or troubleshooting a failed batch.
-        .order_by(models.Transaction.date.asc(), models.Transaction.id.asc())
-        .all()
+    push_type = None
+    explicit_order = None
+    if isinstance(payload, schemas.PushToTallyRequest):
+        push_type = payload.type
+        explicit_order = payload.order
+
+    base_query = db.query(models.Transaction).filter(
+        models.Transaction.status == "APPROVED",
+        models.Transaction.tally_status != "SENT",
     )
+
+    if explicit_order:
+        # The caller (typically a Review & Approve page) already knows the
+        # exact order it wants — usually "whatever order the table is
+        # currently sorted by" — so push in exactly that sequence rather
+        # than re-deriving one. Ids that aren't actually APPROVED/unsent
+        # (already pushed, rejected since the page loaded, etc.) are just
+        # skipped rather than erroring the whole batch.
+        by_id = {tx.id: tx for tx in base_query.filter(models.Transaction.id.in_(explicit_order)).all()}
+        pending = [by_id[i] for i in explicit_order if i in by_id]
+    else:
+        if push_type:
+            base_query = base_query.filter(models.Transaction.type == push_type.upper())
+        # Default order: grouped by voucher type so Tally receives clean,
+        # same-type batches back to back instead of an interleaved mix —
+        # then, within each type, in the order the transactions were
+        # actually approved (falling back to insertion order for any older
+        # rows approved before approved_at existed). "Approved order" is a
+        # more meaningful default than raw id/date order when no explicit
+        # sort was requested.
+        type_priority = {"SALES": 0, "PURCHASE": 1, "DEBIT_NOTE": 2, "CREDIT_NOTE": 3, "BANK": 4}
+        pending = base_query.all()
+        pending.sort(key=lambda tx: (
+            type_priority.get(tx.type, 99),
+            tx.approved_at or datetime.min,
+            tx.id,
+        ))
 
     if not pending:
         return []
@@ -113,6 +140,10 @@ def push_approved_transactions(
             "total_value": tx.total_value,
             "gst_rate": getattr(tx, "gst_rate", 0.0),
             "rate_breakdown": json.loads(tx.rate_breakdown) if getattr(tx, "rate_breakdown", None) else None,
+            "debit": getattr(tx, "debit", 0.0),
+            "credit": getattr(tx, "credit", 0.0),
+            "narration": getattr(tx, "narration", None),
+            "bank_ledger": config.get("bank_ledger"),
         }
         try:
             xml = build_voucher_envelope(tx_dict, config)
@@ -195,6 +226,10 @@ def push_single_transaction(transaction_id: int, db: Session = Depends(get_db)):
         "total_value": tx.total_value,
         "gst_rate": getattr(tx, "gst_rate", 0.0),
         "rate_breakdown": json.loads(tx.rate_breakdown) if getattr(tx, "rate_breakdown", None) else None,
+        "debit": getattr(tx, "debit", 0.0),
+        "credit": getattr(tx, "credit", 0.0),
+        "narration": getattr(tx, "narration", None),
+        "bank_ledger": config.get("bank_ledger"),
     }
     try:
         xml = build_voucher_envelope(tx_dict, config)

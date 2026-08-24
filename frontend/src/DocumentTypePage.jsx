@@ -95,6 +95,12 @@ const CONFIG = {
     uploadLabel: "Upload a purchase bill photo/PDF, a bill-list Excel, or import a GSTR-2B B2B Excel file",
   },
   gstr2b: { docType: "GSTR2B", label: "GSTR-2B (Discount Notes)", accept: ".xlsx,.xls", uploadLabel: "Import GSTR-2B Excel file" },
+  bank: {
+    docType: "BANK",
+    label: "Bank Statements",
+    accept: ".pdf",
+    uploadLabel: "Upload a bank statement PDF — each transaction is parsed into a row you can review and approve, same as Sales/Purchase, before it's pushed to Tally",
+  },
 };
 
 export default function DocumentTypePage({ pageKey }) {
@@ -117,6 +123,8 @@ export default function DocumentTypePage({ pageKey }) {
 
     if (pageKey === "gstr2b") {
       await api.uploadGstr2b(file);
+    } else if (pageKey === "bank") {
+      await api.uploadBankStatement(file);
     } else if (pageKey === "purchase" && isExcel) {
       // Purchase Excel can be either the GSTR-2B B2B bulk export (one
       // government-format file, many invoices, used for the rate-mismatch

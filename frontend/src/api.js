@@ -121,7 +121,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config),
     }),
-  pushToTally: () => req("/tally/push", { method: "POST" }),
+  pushToTally: (opts) =>
+    req("/tally/push", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(opts || {}),
+    }),
   pushSingleToTally: (id) => req(`/tally/push/${id}`, { method: "POST" }),
 
   getRecentActivity: (limit = 10) => req(`/activity/recent?limit=${limit}`),
@@ -150,12 +155,6 @@ export const api = {
   getReportByGstRate: (params = {}) =>
     req(`/reports/by-gst-rate${_qs(params)}`),
 
-  pushBankToTally: (payload) =>
-    req("/bank/push-to-tally", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }),
 };
 
 export function cropImageUrl(cropPath) {

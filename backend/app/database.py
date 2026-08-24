@@ -51,6 +51,10 @@ def run_lightweight_migrations():
         "manually_reviewed": "BOOLEAN DEFAULT 0",
         "rate_breakdown": "TEXT",
         "rate_breakdown_source": "VARCHAR",
+        "debit": "FLOAT DEFAULT 0.0",
+        "credit": "FLOAT DEFAULT 0.0",
+        "narration": "TEXT",
+        "approved_at": "DATETIME",
     }
     with engine.begin() as conn:
         for col_name, col_def in additions.items():

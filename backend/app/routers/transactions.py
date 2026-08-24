@@ -1,3 +1,5 @@
+import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -81,6 +83,20 @@ def _validate_sales_tx(tx: models.Transaction) -> list[str]:
             and abs((tx.taxable_value + tax) - tx.total_value) > 1.50
         ):
             missing.append("taxable + GST = total reconciliation")
+    elif tx.type == "BANK":
+        # A bank row has no GST/invoice-number concept — the only things
+        # that actually make it postable to Tally are a real date and
+        # exactly one side (debit XOR credit) of the entry.
+        if not tx.date:
+            missing.append("date")
+        debit = tx.debit or 0.0
+        credit = tx.credit or 0.0
+        if debit <= 0 and credit <= 0:
+            missing.append("a debit or credit amount")
+        if debit > 0 and credit > 0:
+            missing.append("only one of debit/credit (not both)")
+        if not tx.party or not tx.party.strip():
+            missing.append("counter-party ledger name")
     return missing
 
 
@@ -149,6 +165,7 @@ def approve_transaction(transaction_id: int, db: Session = Depends(get_db)):
         )
 
     tx.status = "APPROVED"
+    tx.approved_at = datetime.datetime.utcnow()
     db.add(
         models.AuditLog(
             transaction_id=tx.id, message="Transaction approved by user"
@@ -206,6 +223,7 @@ def bulk_approve_transactions(
             continue
 
         tx.status = "APPROVED"
+        tx.approved_at = datetime.datetime.utcnow()
         db.add(
             models.AuditLog(
                 transaction_id=tx.id, message="Transaction approved via bulk action"

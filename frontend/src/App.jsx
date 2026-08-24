@@ -17,13 +17,12 @@ import GeneralSettingsPage from "./GeneralSettingsPage.jsx";
 import AccountBillingPage from "./AccountBillingPage.jsx";
 import FirstRunSetup from "./FirstRunSetup.jsx";
 import LicenseGate from "./LicenseGate.jsx";
-import BankStatementPage from "./BankStatementPage.jsx";
 
 const PAGE_META = {
   dashboard: { title: "Dashboard", subtitle: "Welcome back" },
   documents: { title: "Documents", subtitle: "All uploaded documents" },
   transactions: { title: "Transactions", subtitle: "Every extracted transaction" },
-  bank: { title: "Bank Statements", subtitle: "Extract PDF bank statements and push to Tally" },
+  bank: { title: "Bank Statements", subtitle: "Upload a statement PDF, then review & approve each entry before pushing to Tally" },
   tally: { title: "Tally Integration", subtitle: "Push approved transactions into Tally Prime" },
   reports: { title: "Reports", subtitle: "" },
   sales: { title: "Sales Bills", subtitle: "" },
@@ -125,13 +124,12 @@ export default function App() {
       case "transactions":
         return <AllTransactionsPage />;
       case "bank":
-        return <BankStatementPage />;
-      case "tally":
-        return <TallyIntegrationPage />;
       case "sales":
       case "purchase":
       case "gstr2b":
         return <DocumentTypePage pageKey={page} />;
+      case "tally":
+        return <TallyIntegrationPage />;;
       case "review":
         return <ReviewApprovePage />;
       case "issues":

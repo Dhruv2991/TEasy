@@ -309,6 +309,46 @@ def wrap_envelope(tally_messages_xml: str, company_name: str) -> str:
 </ENVELOPE>"""
 
 
+def build_bank_voucher_xml(tx: dict, config: dict) -> str:
+    """Journal voucher for a bank-statement row: bank ledger on one side,
+    the matched counter-party ledger on the other. Mirrors the standalone
+    logic bank.py used to build inline before pushing straight to Tally —
+    now driven off the reviewed/approved Transaction instead of the raw
+    parsed PDF row."""
+    date = _tally_date(tx.get("date"))
+    party = tx.get("party") or "SALDEBTOR"
+    bank_ledger = tx.get("bank_ledger") or config.get("bank_ledger") or "Bank Account"
+    narration = tx.get("narration") or f"Auto-entered by TEasy (Bank){' #' + tx['invoice_number'] if tx.get('invoice_number') else ''}"
+
+    debit = float(tx.get("debit") or 0.0)
+    credit = float(tx.get("credit") or 0.0)
+    is_credit = credit > 0
+    amount = credit if is_credit else debit
+
+    # A credit in the statement (money coming IN) means the bank ledger is
+    # debited and the counter-party is credited, and vice versa for a
+    # debit/withdrawal — standard journal-entry convention.
+    if is_credit:
+        debit_ledger, credit_ledger = bank_ledger, party
+    else:
+        debit_ledger, credit_ledger = party, bank_ledger
+
+    entries = (
+        _ledger_entry(debit_ledger, amount, is_deemed_positive=True)
+        + _ledger_entry(credit_ledger, amount, is_deemed_positive=False)
+    )
+
+    return f"""
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER VCHTYPE="Journal" ACTION="Create" OBJVIEW="Accounting Voucher View">
+            <DATE>{date}</DATE>
+            <VOUCHERTYPENAME>Journal</VOUCHERTYPENAME>
+            <NARRATION>{xml_escape(narration)}</NARRATION>
+            {entries}
+          </VOUCHER>
+        </TALLYMESSAGE>"""
+
+
 def build_voucher_envelope(tx: dict, config: dict) -> str:
     try:
         from .tally_client import fetch_ledgers
@@ -317,6 +357,10 @@ def build_voucher_envelope(tx: dict, config: dict) -> str:
         ledgers = []
 
     raw_type = str(tx.get("type", "PURCHASE")).upper().replace("_", " ")
+
+    if raw_type == "BANK":
+        message = build_bank_voucher_xml(tx, config)
+        return wrap_envelope(message, config["company_name"])
 
     if any(k in raw_type for k in ["CREDIT", "DEBIT", "NOTE", "CDN"]):
         vch_type = "Debit Note"
