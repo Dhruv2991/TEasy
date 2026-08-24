@@ -139,29 +139,25 @@ def upload_gstr2b(file: UploadFile = File(...), db: Session = Depends(get_db)):
     db.refresh(doc)
     return doc
 
-@router.post("/supplier-invoice-match/{transaction_id}", response_model=schemas.SupplierInvoiceMatchResult)
-def match_supplier_invoice(transaction_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """Upload a supplier's own invoice Excel (format varies by supplier — this
-    is NOT the GSTR-2B file) and, if its totals reconcile with the given
-    purchase transaction, resolve that transaction's real per-rate GST split.
+@router.post("/purchase-register-match", response_model=schemas.PurchaseRegisterMatchResult)
+def match_purchase_register(db: Session = Depends(get_db), file: UploadFile = File(...)):
+    """Upload the shop's own periodic purchase register (its billing/POS
+    software's export — one row per invoice with a per-GST-rate breakup,
+    e.g. Value@5%/CGST@2.5%/SGST@2.5%/IGST@5%, Value@12%/..., ...) and
+    reconcile it in bulk against every Purchase transaction already on file
+    from GSTR-2B.
 
-    GSTR-2B stays the source of truth for whether/how much this purchase
-    counts for ITC. The supplier file is only trusted for the rate-split
-    detail, and only after its taxable value and tax totals are checked
-    against what's already on file for this transaction. If they don't
-    reconcile, nothing is changed and the mismatch reason is returned so it
-    can be looked into manually.
+    This replaces uploading a single supplier bill per transaction: one
+    register file typically covers the whole period's purchases, so every
+    mixed-rate ("gst_rate_uncertain") invoice GSTR-2B couldn't cleanly
+    label gets resolved in one pass, matched by invoice number and then
+    verified on totals (see gstr2b/supplier_match.py) before anything is
+    written.
     """
     if not file.filename.lower().endswith((".xlsx", ".xls")):
-        raise HTTPException(400, "Please upload the supplier's invoice as an .xlsx/.xls file.")
+        raise HTTPException(400, "Please upload the shop's purchase register as an .xlsx/.xls file.")
 
-    tx = db.query(models.Transaction).filter(models.Transaction.id == transaction_id).first()
-    if not tx:
-        raise HTTPException(404, "Transaction not found.")
-    if tx.type != "PURCHASE":
-        raise HTTPException(400, "Rate-breakdown matching only applies to Purchase transactions.")
-
-    from ..gstr2b.supplier_invoice_parser import parse_supplier_invoice_excel
+    from ..gstr2b.purchase_register_parser import parse_purchase_register
     from ..gstr2b.supplier_match import reconcile_with_transaction
 
     ext = os.path.splitext(file.filename)[1] or ".xlsx"
@@ -171,38 +167,110 @@ def match_supplier_invoice(transaction_id: int, file: UploadFile = File(...), db
         shutil.copyfileobj(file.file, f)
 
     try:
-        supplier_invoice = parse_supplier_invoice_excel(saved_path)
+        register_rows = parse_purchase_register(saved_path)
     except ValueError as e:
-        _log(db, f"Supplier invoice '{file.filename}' could not be read: {e}", transaction_id=tx.id)
+        _log(db, f"Purchase register '{file.filename}' could not be read: {e}")
         raise HTTPException(400, str(e))
     except Exception as e:
-        _log(db, f"Supplier invoice '{file.filename}' failed unexpectedly: {e}", transaction_id=tx.id)
+        _log(db, f"Purchase register '{file.filename}' failed unexpectedly: {e}")
         raise HTTPException(500, f"Could not read this Excel file: {e}")
 
-    tx_dict = {
-        "invoice_number": tx.invoice_number,
-        "taxable_value": tx.taxable_value,
-        "cgst": tx.cgst,
-        "sgst": tx.sgst,
-        "igst": tx.igst,
-        "total_value": tx.total_value,
-    }
-    result = reconcile_with_transaction(supplier_invoice, tx_dict)
+    # Index register rows by invoice number. A given invoice number is
+    # expected to be unique within one shop's purchase records; if the file
+    # somehow repeats one (e.g. re-exported/merged periods), keep the first
+    # occurrence and note the rest are ignored rather than silently
+    # overwriting a match.
+    by_invoice = {}
+    duplicate_invoice_numbers = set()
+    for row in register_rows:
+        key = row.invoice_number.strip().lower()
+        if key in by_invoice:
+            duplicate_invoice_numbers.add(key)
+            continue
+        by_invoice[key] = row
 
-    if not result.matched:
-        _log(db, f"Supplier invoice '{file.filename}' did not reconcile: {result.reason}", transaction_id=tx.id)
-        return schemas.SupplierInvoiceMatchResult(matched=False, reason=result.reason, transaction=None)
+    purchase_txs = (
+        db.query(models.Transaction)
+        .filter(models.Transaction.type == "PURCHASE")
+        .all()
+    )
+
+    uncertain_before = sum(1 for tx in purchase_txs if tx.gst_rate_uncertain and not tx.rate_breakdown)
+    result_rows = []
+    resolved_count = 0
+    matched_invoice_keys = set()
 
     import json
-    tx.rate_breakdown = json.dumps(result.rate_breakdown)
-    tx.rate_breakdown_source = file.filename
-    tx.gst_rate_uncertain = False  # the mixed rate is now resolved into a real per-line split
-    db.commit()
-    db.refresh(tx)
-    _log(db, f"Supplier invoice '{file.filename}' matched: {result.reason}. Rate breakdown resolved "
-             f"({len(result.rate_breakdown)} rate(s)).", transaction_id=tx.id)
 
-    return schemas.SupplierInvoiceMatchResult(matched=True, reason=result.reason, transaction=tx)
+    for tx in purchase_txs:
+        if not tx.invoice_number:
+            continue
+        key = tx.invoice_number.strip().lower()
+        register_row = by_invoice.get(key)
+        if register_row is None:
+            continue  # this purchase isn't in the shop's register file at all — leave untouched
+        matched_invoice_keys.add(key)
+
+        # Already resolved (e.g. from an earlier register upload) — don't
+        # redo the work, but still count it as matched for the summary.
+        if tx.rate_breakdown:
+            result_rows.append(schemas.RegisterMatchRow(
+                transaction_id=tx.id, invoice_number=tx.invoice_number, party=tx.party,
+                matched=True, resolved=False, reason="Already resolved from an earlier match",
+            ))
+            continue
+
+        tx_dict = {
+            "invoice_number": tx.invoice_number,
+            "taxable_value": tx.taxable_value,
+            "cgst": tx.cgst,
+            "sgst": tx.sgst,
+            "igst": tx.igst,
+            "total_value": tx.total_value,
+        }
+        match = reconcile_with_transaction(register_row, tx_dict)
+
+        if not match.matched:
+            result_rows.append(schemas.RegisterMatchRow(
+                transaction_id=tx.id, invoice_number=tx.invoice_number, party=tx.party,
+                matched=False, resolved=False, reason=match.reason,
+            ))
+            _log(db, f"Purchase register row for invoice '{tx.invoice_number}' did not reconcile: {match.reason}",
+                 transaction_id=tx.id)
+            continue
+
+        tx.rate_breakdown = json.dumps(match.rate_breakdown)
+        tx.rate_breakdown_source = file.filename
+        was_uncertain = tx.gst_rate_uncertain
+        tx.gst_rate_uncertain = False
+        db.commit()
+        db.refresh(tx)
+        resolved_count += 1
+        rate_summary = ", ".join(f"{b['rate']}% on ₹{b['taxable_value']}" for b in match.rate_breakdown)
+        result_rows.append(schemas.RegisterMatchRow(
+            transaction_id=tx.id, invoice_number=tx.invoice_number, party=tx.party,
+            matched=True, resolved=True,
+            reason=f"Resolved: {rate_summary}" if was_uncertain else f"Confirmed single-rate split: {rate_summary}",
+        ))
+        _log(db, f"Purchase register '{file.filename}' resolved invoice '{tx.invoice_number}' "
+                 f"({len(match.rate_breakdown)} rate(s)): {rate_summary}", transaction_id=tx.id)
+
+    still_uncertain = sum(1 for tx in purchase_txs if tx.gst_rate_uncertain and not tx.rate_breakdown)
+    unmatched_register_rows = len(set(by_invoice.keys()) - matched_invoice_keys)
+
+    _log(db, f"Purchase register '{file.filename}': {resolved_count} invoice(s) resolved, "
+             f"{still_uncertain} still uncertain, {unmatched_register_rows} register row(s) had no matching "
+             f"GSTR-2B purchase on file"
+             + (f" | {len(duplicate_invoice_numbers)} duplicate invoice number(s) in the register file were skipped" if duplicate_invoice_numbers else ""))
+
+    return schemas.PurchaseRegisterMatchResult(
+        total_purchase_transactions=len(purchase_txs),
+        uncertain_before=uncertain_before,
+        resolved=resolved_count,
+        still_uncertain=still_uncertain,
+        unmatched_register_rows=unmatched_register_rows,
+        rows=result_rows,
+    )
 
 
 @router.post("/purchase-upload", response_model=schemas.DocumentOut)

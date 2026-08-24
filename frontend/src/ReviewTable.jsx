@@ -14,64 +14,6 @@ function roundRupee(n) {
   return Math.round(Number(n) || 0);
 }
 
-// Lets the user attach the supplier's own invoice Excel for a purchase
-// transaction so the real per-rate GST split can be recovered — GSTR-2B's
-// B2B sheet only gives an invoice-level aggregate, never a line-item rate
-// breakdown. The upload is only accepted server-side if its totals
-// reconcile with what's already on file for this transaction.
-function SupplierInvoiceUpload({ transactionId, onChanged }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const inputId = `supplier-invoice-${transactionId}`;
-
-  const handleFile = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    setBusy(true);
-    setError("");
-    try {
-      const result = await api.matchSupplierInvoice(transactionId, file);
-      if (!result.matched) {
-        setError(result.reason);
-      } else {
-        await onChanged();
-      }
-    } catch (err) {
-      setError(err.message || "Upload failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <span className="ml-1.5 inline-flex items-center align-middle">
-      <input
-        id={inputId}
-        type="file"
-        accept=".xlsx,.xls"
-        className="hidden"
-        onChange={handleFile}
-        disabled={busy}
-      />
-      <label
-        htmlFor={inputId}
-        title="Upload the supplier's own invoice Excel to resolve the real per-rate GST split"
-        className={`text-[10px] font-medium border border-slate-300 px-1.5 py-0.5 rounded cursor-pointer hover:bg-slate-100 ${
-          busy ? "opacity-40 cursor-not-allowed" : ""
-        }`}
-      >
-        {busy ? "Matching…" : "Match supplier invoice"}
-      </label>
-      {error && (
-        <span className="ml-1 text-[10px] text-rose-600 max-w-[220px]" title={error}>
-          ⚠ {error.length > 40 ? error.slice(0, 40) + "…" : error}
-        </span>
-      )}
-    </span>
-  );
-}
-
 function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
   const tx = bill.transaction;
   const [editing, setEditing] = useState(false);
@@ -251,7 +193,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             {tx.gst_rate_uncertain && !tx.rate_breakdown && (
               <span
                 className="ml-1.5 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded"
-                title="This Excel doesn't break the invoice down by rate — likely a mixed-rate invoice (multiple GST slabs on one bill). The taxable/tax amounts are exact; verify the correct rate split before pushing to Tally."
+                title="This Excel doesn't break the invoice down by rate — likely a mixed-rate invoice (multiple GST slabs on one bill). The taxable/tax amounts are exact; upload the shop's purchase register (Purchase screen → Compare with purchase register) to resolve the real per-rate split for this and every other mixed-rate invoice at once."
               >
                 RATE UNCERTAIN
               </span>
@@ -271,9 +213,6 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
               >
                 RATE SPLIT RESOLVED
               </span>
-            )}
-            {tx.type === "PURCHASE" && !tx.rate_breakdown && (
-              <SupplierInvoiceUpload transactionId={tx.id} onChanged={onChanged} />
             )}
           </td>
         </>

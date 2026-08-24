@@ -36,6 +36,24 @@ class SupplierInvoiceMatchResult(BaseModel):
     transaction: Optional[TransactionOut] = None
 
 
+class RegisterMatchRow(BaseModel):
+    transaction_id: int
+    invoice_number: Optional[str] = None
+    party: str
+    matched: bool
+    resolved: bool  # True if this row's mixed rate was newly resolved
+    reason: str
+
+
+class PurchaseRegisterMatchResult(BaseModel):
+    total_purchase_transactions: int
+    uncertain_before: int
+    resolved: int
+    still_uncertain: int
+    unmatched_register_rows: int
+    rows: List[RegisterMatchRow] = []
+
+
 class TransactionUpdate(BaseModel):
     party: Optional[str] = None
     date: Optional[str] = None

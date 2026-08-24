@@ -3,6 +3,84 @@ import { api } from "./api.js";
 import UploadBox from "./UploadBox.jsx";
 import ReviewTable from "./ReviewTable.jsx";
 
+// Purchase invoices with items at more than one GST rate ("mixed-rate")
+// can't be resolved from GSTR-2B alone — it only gives one taxable/tax
+// total per invoice. This box compares the GSTR-2B import already on file
+// against the shop's own purchase register (its billing software's export,
+// one row per invoice with a per-rate breakup) and resolves every
+// mixed-rate invoice it can match in one pass, instead of handling them
+// one at a time.
+function PurchaseRegisterCompare({ onResolved }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null);
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setBusy(true);
+    setError("");
+    setResult(null);
+    try {
+      const res = await api.matchPurchaseRegister(file);
+      setResult(res);
+      await onResolved();
+    } catch (err) {
+      setError(err.message || "Compare failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5">
+      <h2 className="font-semibold text-slate-900 mb-1">Compare with purchase register</h2>
+      <p className="text-sm text-slate-500 mb-4">
+        Upload the shop's own purchase register (the GST rate-breakup export from your billing
+        software — one row per invoice, split into Value@5%/CGST@2.5%/SGST@2.5%, Value@12%, etc.).
+        Every purchase invoice already imported from GSTR-2B that's flagged{" "}
+        <span className="font-semibold text-amber-700">RATE UNCERTAIN</span> (mixed GST rates on one
+        bill) will be matched by invoice number, cross-checked on totals, and resolved into the
+        correct per-rate split for Tally — all in one pass.
+      </p>
+      <label
+        className={`inline-flex items-center gap-2 text-sm font-medium border border-slate-300 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-50 ${
+          busy ? "opacity-50 cursor-not-allowed" : ""
+        }`}
+      >
+        <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFile} disabled={busy} />
+        {busy ? "Comparing…" : "Upload purchase register (.xlsx / .xls)"}
+      </label>
+
+      {error && <p className="mt-3 text-sm text-rose-600">⚠ {error}</p>}
+
+      {result && (
+        <div className="mt-4 text-sm bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1">
+          <p>
+            <span className="font-semibold text-emerald-700">{result.resolved}</span> mixed-rate invoice(s)
+            resolved out of <span className="font-semibold">{result.uncertain_before}</span> that were
+            uncertain.
+          </p>
+          {result.still_uncertain > 0 && (
+            <p className="text-amber-700">
+              {result.still_uncertain} invoice(s) are still uncertain — not found in this register
+              file, or their totals didn't match closely enough to trust.
+            </p>
+          )}
+          {result.unmatched_register_rows > 0 && (
+            <p className="text-slate-500">
+              {result.unmatched_register_rows} row(s) in the register file didn't match any purchase
+              already on file (different period, or that supplier hasn't been imported from GSTR-2B
+              yet).
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const CONFIG = {
   sales: {
     docType: "SALES",
@@ -80,6 +158,8 @@ export default function DocumentTypePage({ pageKey }) {
           multiple={pageKey === "sales"}
         />
       </div>
+
+      {pageKey === "purchase" && <PurchaseRegisterCompare onResolved={refresh} />}
 
       {failedDocs.length > 0 && (
         <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-sm text-rose-700">
