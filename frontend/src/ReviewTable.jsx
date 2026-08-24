@@ -3,13 +3,40 @@ import { api, cropImageUrl } from "./api.js";
 import { StatusBadge, ConfidenceBadge, formatMoney } from "./ui.jsx";
 import { Icon } from "./icons.jsx";
 
+// Converts various incoming date formats (DD/MM/YYYY, DD-MM-YYYY, YYYYMMDD) 
+// into YYYY-MM-DD required by HTML5 <input type="date">
+function toIsoDate(dateStr) {
+  if (!dateStr) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+
+  // Handle YYYYMMDD
+  if (/^\d{8}$/.test(dateStr)) {
+    return `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`;
+  }
+
+  // Handle DD/MM/YYYY or DD-MM-YYYY
+  const parts = dateStr.split(/[/-]/);
+  if (parts.length === 3) {
+    if (parts[2].length === 4) {
+      const day = parts[0].padStart(2, "0");
+      const month = parts[1].padStart(2, "0");
+      const year = parts[2];
+      return `${year}-${month}-${day}`;
+    }
+    if (parts[0].length === 4) {
+      const year = parts[0];
+      const month = parts[1].padStart(2, "0");
+      const day = parts[2].padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    }
+  }
+  return dateStr;
+}
+
 function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 
-// The Total is what actually gets saved/pushed to Tally — GST rules expect
-// it rounded off to the nearest whole rupee, so we force it to an integer
-// here (not just at display time via formatMoney).
 function roundRupee(n) {
   return Math.round(Number(n) || 0);
 }
@@ -20,7 +47,6 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
   const [form, setForm] = useState(tx || {});
   const [busy, setBusy] = useState(false);
 
-  // Prevent background polling from overwriting the form while actively editing
   useEffect(() => {
     if (!editing) {
       setForm(tx || {});
@@ -30,7 +56,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
   if (!tx) return null;
 
   const startEdit = () => {
-    setForm({ ...tx });
+    setForm({ ...tx, date: toIsoDate(tx.date) });
     setEditing(true);
   };
 
@@ -39,12 +65,8 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
     setEditing(false);
   };
 
-  // Recompute the tax split whenever taxable value or GST rate change,
-  // keeping the existing intra-state (CGST+SGST) vs inter-state (IGST)
-  // shape of whatever this transaction already had — we don't decide that
-  // here, we just re-split the same way it was split before.
   const recalcFromTaxableAndRate = (taxable, rate) => {
-    const taxAmount = (Number(taxable) || 0) * (Number(rate) || 0) / 100;
+    const taxAmount = ((Number(taxable) || 0) * (Number(rate) || 0)) / 100;
     const wasInterState = (Number(form.igst) || 0) > 0;
     const next = wasInterState
       ? { igst: round2(taxAmount), cgst: 0, sgst: 0 }
@@ -55,12 +77,20 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
 
   const handleTaxableChange = (value) => {
     const taxable = parseFloat(value) || 0;
-    setForm((f) => ({ ...f, taxable_value: taxable, ...recalcFromTaxableAndRate(taxable, f.gst_rate) }));
+    setForm((f) => ({
+      ...f,
+      taxable_value: taxable,
+      ...recalcFromTaxableAndRate(taxable, f.gst_rate),
+    }));
   };
 
   const handleRateChange = (value) => {
     const rate = parseFloat(value) || 0;
-    setForm((f) => ({ ...f, gst_rate: rate, ...recalcFromTaxableAndRate(f.taxable_value, rate) }));
+    setForm((f) => ({
+      ...f,
+      gst_rate: rate,
+      ...recalcFromTaxableAndRate(f.taxable_value, rate),
+    }));
   };
 
   const save = async () => {
@@ -90,9 +120,13 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
 
   const img = cropImageUrl(bill.crop_path);
 
-  const taxSum = (Number(form.cgst) || 0) + (Number(form.sgst) || 0) + (Number(form.igst) || 0);
+  const taxSum =
+    (Number(form.cgst) || 0) +
+    (Number(form.sgst) || 0) +
+    (Number(form.igst) || 0);
   const computedTotal = roundRupee((Number(form.taxable_value) || 0) + taxSum);
-  const reconciled = Math.abs(computedTotal - (Number(form.total_value) || 0)) <= 1.5;
+  const reconciled =
+    Math.abs(computedTotal - (Number(form.total_value) || 0)) <= 1.5;
 
   return (
     <tr className="border-b border-slate-100 hover:bg-slate-50/60">
@@ -131,10 +165,11 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             />
           </td>
           <td className="p-3">
+            {/* Calendar Date Picker Input */}
             <input
-              type="text"
-              className="border border-slate-300 rounded px-2 py-1 text-sm w-28"
-              value={form.date || ""}
+              type="date"
+              className="border border-slate-300 rounded px-2 py-1 text-sm w-36"
+              value={toIsoDate(form.date)}
               onChange={(e) => setForm({ ...form, date: e.target.value })}
             />
           </td>
@@ -168,8 +203,14 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             <div className="text-sm font-medium text-slate-900 mt-1">
               ₹{formatMoney(computedTotal)}
             </div>
-            <div className={`text-[10px] ${reconciled ? "text-emerald-600" : "text-rose-600"}`}>
-              {reconciled ? "Balances ✓" : `≠ saved total (₹${formatMoney(form.total_value)})`}
+            <div
+              className={`text-[10px] ${
+                reconciled ? "text-emerald-600" : "text-rose-600"
+              }`}
+            >
+              {reconciled
+                ? "Balances ✓"
+                : `≠ saved total (₹${formatMoney(form.total_value)})`}
             </div>
           </td>
         </>
@@ -193,7 +234,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             {tx.gst_rate_uncertain && !tx.rate_breakdown && (
               <span
                 className="ml-1.5 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded"
-                title="This Excel doesn't break the invoice down by rate — likely a mixed-rate invoice (multiple GST slabs on one bill). The taxable/tax amounts are exact; upload the shop's purchase register (Purchase screen → Compare with purchase register) to resolve the real per-rate split for this and every other mixed-rate invoice at once."
+                title="This Excel doesn't break the invoice down by rate — likely a mixed-rate invoice (multiple GST slabs on one bill)."
               >
                 RATE UNCERTAIN
               </span>
@@ -201,15 +242,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             {tx.rate_breakdown && (
               <span
                 className="ml-1.5 text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded"
-                title={`Resolved from supplier invoice '${tx.rate_breakdown_source || ""}': ${
-                  (() => {
-                    try {
-                      return JSON.parse(tx.rate_breakdown).map((b) => `${b.rate}% on ₹${b.taxable_value}`).join(", ");
-                    } catch {
-                      return "";
-                    }
-                  })()
-                }`}
+                title={`Resolved from supplier invoice '${tx.rate_breakdown_source || ""}'`}
               >
                 RATE SPLIT RESOLVED
               </span>
@@ -220,7 +253,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
 
       <td className="p-3">
         <ConfidenceBadge value={tx.confidence} />
-        {tx.type === "SALES" && Number(tx.confidence || 0) < 0.80 && (
+        {tx.type === "SALES" && Number(tx.confidence || 0) < 0.8 && (
           <div className="mt-1 text-[10px] font-medium text-amber-700">
             Manual check required
           </div>
@@ -242,7 +275,11 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             <button
               disabled={busy || !reconciled}
               onClick={save}
-              title={!reconciled ? "Taxable + GST must equal Total before saving" : ""}
+              title={
+                !reconciled
+                  ? "Taxable + GST must equal Total before saving"
+                  : ""
+              }
               className="text-xs bg-slate-900 text-white px-2.5 py-1 rounded-md disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Save
@@ -285,9 +322,6 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
   );
 }
 
-// Builds a CSV file client-side from whatever rows are currently visible
-// (i.e. after search + status filter are applied) and triggers a download.
-// Kept dependency-free — just quote/escape per RFC 4180 and blob-download.
 function downloadCsv(rows, filename) {
   const headers = [
     "Party",
@@ -329,7 +363,7 @@ function downloadCsv(rows, filename) {
         .join(",")
     );
   }
-  const csv = "\uFEFF" + lines.join("\r\n"); // BOM so Excel opens ₹/UTF-8 correctly
+  const csv = "\uFEFF" + lines.join("\r\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -344,8 +378,8 @@ function downloadCsv(rows, filename) {
 export default function ReviewTable({ bills, onChanged }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
-  const [sortKey, setSortKey] = useState(null);   // "party" | "date" | "invoice_number" | "total_value" | "gst_rate" | "confidence" | "status"
-  const [sortDir, setSortDir] = useState("asc");  // "asc" | "desc"
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc");
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
 
@@ -357,15 +391,10 @@ export default function ReviewTable({ bills, onChanged }) {
     );
   }
 
-  // Distinct statuses actually present, so the filter dropdown never shows
-  // an option that would just return an empty table.
   const statusesPresent = Array.from(
     new Set(bills.map((b) => b.transaction?.status).filter(Boolean))
   );
 
-  // Search matches party name, invoice number, or date (all substring,
-  // case-insensitive) — the three things someone scanning a big batch is
-  // actually looking for. Status filter narrows independently.
   const q = searchQuery.trim().toLowerCase();
   const filteredBills = bills.filter((b) => {
     const tx = b.transaction;
@@ -376,10 +405,6 @@ export default function ReviewTable({ bills, onChanged }) {
     return haystack.includes(q);
   });
 
-  // Sorting a freshly-scanned Excel/bill batch by column (party, date,
-  // amount, etc.) makes a messy dump of rows actually scannable — this is
-  // purely a display-order change; it doesn't touch the underlying data or
-  // which transactions get approved/pushed.
   const sortableColumns = {
     party: (b) => (b.transaction?.party || "").toLowerCase(),
     date: (b) => b.transaction?.date || "",
@@ -405,9 +430,6 @@ export default function ReviewTable({ bills, onChanged }) {
       })
     : filteredBills;
 
-  // Column totals footer reflects whatever's currently visible (search +
-  // status filter applied), not the whole unfiltered batch — matches what
-  // the person is actually looking at.
   const totals = sortedBills.reduce(
     (acc, b) => {
       const tx = b.transaction || {};
@@ -445,9 +467,6 @@ export default function ReviewTable({ bills, onChanged }) {
     </th>
   );
 
-  // "Select all" / bulk actions operate on what's currently visible
-  // (post search+filter), not the whole batch — selecting a filtered-down
-  // view and hitting "Approve Selected" shouldn't silently touch hidden rows.
   const allTxIds = sortedBills
     .map((b) => b.transaction?.id)
     .filter(Boolean);
@@ -469,7 +488,6 @@ export default function ReviewTable({ bills, onChanged }) {
     );
   };
 
-  // --- Bulk Action Handlers ---
   const handleBulkApprove = async () => {
     if (!selectedIds.length) return;
     setBulkBusy(true);
