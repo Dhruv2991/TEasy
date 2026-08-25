@@ -363,7 +363,21 @@ def extract_bank_transactions(file) -> list[dict]:
                         if debit == 0 and credit == 0:
                             continue
 
-                        particulars = extract_party_name(description)
+                        # Deliberately NOT calling extract_party_name() here.
+                        # Guessing a party/ledger name out of a bank
+                        # narration is unreliable across bank formats (UPI
+                        # purpose codes, bank IFSC codes, and reference
+                        # numbers all look enough like names to fool a
+                        # heuristic — see extract_party_name()'s own
+                        # comments for the false-positive cases already
+                        # found). Rather than risk silently mis-filing a
+                        # transaction under the wrong ledger, every bank
+                        # transaction gets the same placeholder party and
+                        # the FULL original narration is preserved as-is —
+                        # the actual party gets assigned by a human during
+                        # Review & Approve, same as any other row that
+                        # can't be confidently auto-matched.
+                        particulars = "SALDEBTOR"
 
                         transactions.append({
                             "txn_date": txn_date,
@@ -385,7 +399,8 @@ def extract_bank_transactions(file) -> list[dict]:
                         # Filter out page headers and footers
                         if extra_text and not any(k in extra_text.lower() for k in ["page", "statement", "total", "opening balance", "closing balance"]):
                             transactions[-1]["narration"] = (transactions[-1]["narration"] + " " + extra_text).strip()
-                            transactions[-1]["particulars"] = extract_party_name(transactions[-1]["narration"])
+                            # particulars stays "SALDEBTOR" — see comment above;
+                            # continuation lines just extend the narration text.
 
     return transactions
 
@@ -468,15 +483,13 @@ async def upload_bank_statement(file: UploadFile = File(...), db: Session = Depe
                    "statement export (not a scanned image) and try again.",
         )
 
-    # Ledger-match the raw particulars against what's actually in Tally right
-    # now, same as before — but done once at upload time so what the user
-    # sees and edits in Review & Approve is already the real ledger name,
-    # not a mismatch they'd only discover at push time. Falls back to
-    # "SALDEBTOR" (same as before) when Tally isn't reachable or has no
-    # matching ledger; the user can still fix it before approving.
-    tally_config = get_tally_config()
-    tally_ledgers = get_existing_tally_ledgers(tally_config.get("company_name", ""))
-
+    # NOTE: extract_bank_transactions() no longer tries to guess a
+    # party/ledger name from the narration — every row comes back with
+    # particulars="SALDEBTOR" by design (see the comment at its call site).
+    # So there's nothing meaningful left to Tally-ledger-match here; the
+    # party gets set by a human in Review & Approve instead. Skipping the
+    # get_existing_tally_ledgers() call also means one less Tally API round
+    # trip (and one less thing that can fail) on every bank statement upload.
     skipped_zero = 0
     for idx, raw in enumerate(raw_transactions):
         debit = float(raw.get("debit") or 0.0)
@@ -501,8 +514,7 @@ async def upload_bank_statement(file: UploadFile = File(...), db: Session = Depe
         db.commit()
         db.refresh(bill)
 
-        raw_party = (raw.get("particulars") or "").strip()
-        party = tally_ledgers.get(raw_party.lower(), raw_party or "SALDEBTOR")
+        party = (raw.get("particulars") or "SALDEBTOR").strip() or "SALDEBTOR"
 
         tx = models.Transaction(
             bill_id=bill.id,
