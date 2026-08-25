@@ -81,6 +81,7 @@
 
   forms.forEach((form) => {
     const plan = form.dataset.plan; // "monthly" or "yearly"
+    const tier = form.dataset.tier || "silver"; // "silver" or "gold"
     const input = form.querySelector("input[type=email]");
     const button = form.querySelector("button");
     const note = form.parentElement.querySelector(".subscribe-note");
@@ -124,7 +125,7 @@
         const subRes = await fetch(`${base}/billing/create-subscription`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ license_key: trialData.license_key, plan }),
+          body: JSON.stringify({ license_key: trialData.license_key, plan, tier }),
         });
         if (!subRes.ok) {
           const body = await subRes.json().catch(() => ({}));

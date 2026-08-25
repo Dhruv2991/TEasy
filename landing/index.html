@@ -138,12 +138,12 @@
   <section class="pricing" id="pricing">
     <div class="pricing-intro">
       <p class="eyebrow">Simple pricing, everything included</p>
-      <h2>One plan. Two ways to pay for it.</h2>
+      <h2>Two editions. Two ways to pay for each.</h2>
     </div>
     <div class="pricing-grid">
 
-      <div class="pricing-card" data-plan="monthly">
-        <p class="eyebrow">Monthly</p>
+      <div class="pricing-card" data-plan="monthly" data-tier="silver">
+        <p class="eyebrow">Silver <span class="tier-badge">1 device</span></p>
         <div class="price">
           <span class="price-amount mono">₹499</span>
           <span class="price-period">/ month</span>
@@ -155,16 +155,16 @@
           <li>7-day free trial, no card needed</li>
         </ul>
 
-        <form class="subscribe-form" data-plan="monthly" novalidate>
-          <label class="sr-only" for="sub-email-monthly">Work email</label>
-          <input id="sub-email-monthly" type="email" placeholder="you@company.com" required autocomplete="email" />
+        <form class="subscribe-form" data-plan="monthly" data-tier="silver" novalidate>
+          <label class="sr-only" for="sub-email-silver-monthly">Work email</label>
+          <input id="sub-email-silver-monthly" type="email" placeholder="you@company.com" required autocomplete="email" />
           <button type="submit" class="btn-primary">Subscribe monthly</button>
         </form>
         <p class="subscribe-note">You'll pay ₹499 now via Razorpay, then every month. Want to try free first? <a href="#trial">Start a 7-day trial</a> instead.</p>
       </div>
 
-      <div class="pricing-card featured" data-plan="yearly">
-        <p class="eyebrow">Yearly <span class="save-badge">2 months free</span></p>
+      <div class="pricing-card featured" data-plan="yearly" data-tier="silver">
+        <p class="eyebrow">Silver <span class="tier-badge">1 device</span> <span class="save-badge">2 months free</span></p>
         <div class="price">
           <span class="price-amount mono">₹4,999</span>
           <span class="price-period">/ year</span>
@@ -177,12 +177,55 @@
           <li>7-day free trial, no card needed</li>
         </ul>
 
-        <form class="subscribe-form" data-plan="yearly" novalidate>
-          <label class="sr-only" for="sub-email-yearly">Work email</label>
-          <input id="sub-email-yearly" type="email" placeholder="you@company.com" required autocomplete="email" />
+        <form class="subscribe-form" data-plan="yearly" data-tier="silver" novalidate>
+          <label class="sr-only" for="sub-email-silver-yearly">Work email</label>
+          <input id="sub-email-silver-yearly" type="email" placeholder="you@company.com" required autocomplete="email" />
           <button type="submit" class="btn-primary">Subscribe yearly</button>
         </form>
         <p class="subscribe-note">You'll pay ₹4,999 now via Razorpay, then every year. Want to try free first? <a href="#trial">Start a 7-day trial</a> instead.</p>
+      </div>
+
+      <div class="pricing-card" data-plan="monthly" data-tier="gold">
+        <p class="eyebrow">Gold <span class="tier-badge">Up to 3 devices</span></p>
+        <div class="price">
+          <span class="price-amount mono">₹699</span>
+          <span class="price-period">/ month</span>
+        </div>
+        <ul class="price-list">
+          <li>Everything in Silver</li>
+          <li>Same key on up to 3 devices</li>
+          <li>Counter, home, and your accountant — all covered</li>
+          <li>7-day free trial, no card needed</li>
+        </ul>
+
+        <form class="subscribe-form" data-plan="monthly" data-tier="gold" novalidate>
+          <label class="sr-only" for="sub-email-gold-monthly">Work email</label>
+          <input id="sub-email-gold-monthly" type="email" placeholder="you@company.com" required autocomplete="email" />
+          <button type="submit" class="btn-primary">Subscribe monthly</button>
+        </form>
+        <p class="subscribe-note">You'll pay ₹699 now via Razorpay, then every month. Want to try free first? <a href="#trial">Start a 7-day trial</a> instead.</p>
+      </div>
+
+      <div class="pricing-card featured gold" data-plan="yearly" data-tier="gold">
+        <p class="eyebrow">Gold <span class="tier-badge">Up to 3 devices</span> <span class="save-badge">2 months free</span></p>
+        <div class="price">
+          <span class="price-amount mono">₹5,999</span>
+          <span class="price-period">/ year</span>
+        </div>
+        <p class="price-equiv">≈ ₹500/month, billed annually</p>
+        <ul class="price-list">
+          <li>Everything in Silver</li>
+          <li>Same key on up to 3 devices</li>
+          <li>Counter, home, and your accountant — all covered</li>
+          <li>7-day free trial, no card needed</li>
+        </ul>
+
+        <form class="subscribe-form" data-plan="yearly" data-tier="gold" novalidate>
+          <label class="sr-only" for="sub-email-gold-yearly">Work email</label>
+          <input id="sub-email-gold-yearly" type="email" placeholder="you@company.com" required autocomplete="email" />
+          <button type="submit" class="btn-primary">Subscribe yearly</button>
+        </form>
+        <p class="subscribe-note">You'll pay ₹5,999 now via Razorpay, then every year. Want to try free first? <a href="#trial">Start a 7-day trial</a> instead.</p>
       </div>
 
     </div>
