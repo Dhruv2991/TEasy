@@ -1,6 +1,6 @@
 import re
 from typing import List, Optional, Dict
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
 from pydantic import BaseModel
 import pdfplumber
 import requests
