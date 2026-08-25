@@ -1,6 +1,6 @@
 import re
 from typing import List, Optional, Dict
-from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 import pdfplumber
 import requests
@@ -300,7 +300,20 @@ async def upload_bank_statement(file: UploadFile = File(...), db: Session = Depe
     tally_config = get_tally_config()
     tally_ledgers = get_existing_tally_ledgers(tally_config.get("company_name", ""))
 
+    skipped_zero = 0
     for idx, raw in enumerate(raw_transactions):
+        debit = float(raw.get("debit") or 0.0)
+        credit = float(raw.get("credit") or 0.0)
+        if debit <= 0 and credit <= 0:
+            # Belt-and-suspenders: extract_bank_transactions() already
+            # skips 0/0 rows itself, but if a future column-detection
+            # tweak ever lets one slip through, don't persist a
+            # transaction that can never be approved anyway — it'd just
+            # sit stuck in Review & Approve with no way to fix it short of
+            # deleting it by hand.
+            skipped_zero += 1
+            continue
+
         bill = models.DetectedBill(
             document_id=doc.id,
             crop_path=None,
@@ -313,9 +326,6 @@ async def upload_bank_statement(file: UploadFile = File(...), db: Session = Depe
 
         raw_party = (raw.get("particulars") or "").strip()
         party = tally_ledgers.get(raw_party.lower(), raw_party or "SALDEBTOR")
-
-        debit = float(raw.get("debit") or 0.0)
-        credit = float(raw.get("credit") or 0.0)
 
         tx = models.Transaction(
             bill_id=bill.id,
@@ -340,6 +350,9 @@ async def upload_bank_statement(file: UploadFile = File(...), db: Session = Depe
     doc.status = "NEEDS_REVIEW"
     db.commit()
     db.refresh(doc)
-    _log(db, f"Parsed {len(raw_transactions)} bank transaction(s), ready for review", document_id=doc.id)
+    _log(db, f"Parsed {len(raw_transactions)} bank transaction(s), ready for review"
+             + (f" ({skipped_zero} row(s) with no detected debit/credit amount were skipped — "
+                f"check the PDF's column layout if this number looks high)" if skipped_zero else ""),
+         document_id=doc.id)
 
     return doc

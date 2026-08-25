@@ -160,7 +160,7 @@ def approve_transaction(transaction_id: int, db: Session = Depends(get_db)):
     if missing:
         raise HTTPException(
             400,
-            "Sales transaction requires manual correction before approval: "
+            f"This {tx.type.replace('_', ' ').title()} transaction needs manual correction before approval: "
             + ", ".join(missing),
         )
 

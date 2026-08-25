@@ -49,6 +49,7 @@ class License(Base):
 
     razorpay_subscription_id = Column(String, nullable=True)
     plan = Column(String, nullable=True, default="monthly")  # "monthly" or "yearly" — set once they actually subscribe; null during trial
+    tier = Column(String, nullable=False, default="silver")  # "silver" (1 device) or "gold" (3 devices) — set from /billing/create-subscription, defaults to "silver" for older rows that predate tiers
     trial_reminder_sent_at = Column(DateTime(timezone=True), nullable=True)  # so the daily reminder job doesn't email the same person twice
 
     # Hash of a few OS-level machine identifiers (see backend/app/security/
@@ -64,6 +65,29 @@ class License(Base):
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)
 
     user = relationship("User", back_populates="licenses")
+    devices = relationship("LicenseDevice", back_populates="license", cascade="all, delete-orphan")
+
+
+class LicenseDevice(Base):
+    """One row per (license, physical machine) pair that has ever checked in
+    on a *paid* license. This is what makes the tier's device limit real —
+    unlike License.device_fingerprint (singular, trial-abuse prevention
+    only), a license can have many of these. /license/check inserts a new
+    row the first time a given fingerprint shows up for a key, refuses a
+    new-but-over-limit fingerprint with 409, and just bumps last_seen for
+    ones it already knows. deactivate lets a user free up a slot without
+    support intervention (e.g. after retiring/reformatting a machine).
+    """
+    __tablename__ = "license_devices"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    license_id = Column(String, ForeignKey("licenses.id"), nullable=False, index=True)
+    device_fingerprint = Column(String, nullable=False, index=True)
+
+    first_seen = Column(DateTime(timezone=True), default=_now)
+    last_seen = Column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    license = relationship("License", back_populates="devices")
 
 
 class WebhookEvent(Base):

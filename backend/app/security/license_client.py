@@ -29,6 +29,18 @@ LICENSE_SERVICE_URL = os.environ.get("TEASY_LICENSE_SERVICE_URL", "https://teasy
 GRACE_DAYS = int(os.environ.get("TEASY_LICENSE_GRACE_DAYS", "5"))
 REQUEST_TIMEOUT = 5
 
+# License editions, named after Tally's own Silver/Gold split so the
+# concept is instantly familiar to anyone who's bought a Tally license
+# before: Silver is a single-device seat, Gold allows a small number of
+# devices on the same key (e.g. one machine at the shop counter + one at
+# home/the accountant's office). The actual device-count enforcement has
+# to live on the license service (this app only ever talks to it over
+# HTTP) — these limits are the client's understanding of the contract so
+# the UI can show the right copy; the license service is the source of
+# truth and can override tier/limit per key in its response.
+TIER_DEVICE_LIMIT = {"silver": 1, "gold": 3}
+TIER_LABEL = {"silver": "Silver", "gold": "Gold"}
+
 
 def _cache_path() -> str:
     return os.path.join(get_data_dir(), "license_cache.json")
@@ -58,6 +70,20 @@ def _parse(ts: str | None):
     if not ts:
         return None
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+def device_info() -> dict:
+    """Shown in the Account & Billing page so a user can quote/copy their
+    device id to support, and see how many of their tier's device slots
+    this specific install counts as. Purely informational on the client
+    side — the license service is what actually enforces the limit."""
+    cache = _load_cache()
+    tier = cache.get("tier", "silver")
+    return {
+        "device_fingerprint": get_device_fingerprint(),
+        "tier": tier,
+        "device_limit": TIER_DEVICE_LIMIT.get(tier, 1),
+    }
 
 
 def get_license_key() -> str | None:
@@ -109,6 +135,7 @@ def _remember_result(remote: dict) -> None:
     cache["status"] = remote.get("status")
     cache["expires_at"] = remote.get("expires_at")
     cache["valid"] = remote.get("valid", True)
+    cache["tier"] = remote.get("tier", cache.get("tier", "silver"))
     cache["last_online_check"] = _now().isoformat()
     _save_cache(cache)
 
@@ -119,13 +146,13 @@ def _status_from_cache_only(cache: dict) -> dict:
     online path again before the grace window closes."""
     license_key = cache.get("license_key")
     if not license_key:
-        return {"activated": False, "valid": False, "status": "none", "source": "none"}
+        return {"activated": False, "valid": False, "status": "none", "tier": None, "source": "none"}
 
     last_check = _parse(cache.get("last_online_check"))
     if not last_check:
         # Never successfully verified this key online — don't grant access
         # on trust alone, since that'd make the grace period pointless.
-        return {"activated": True, "valid": False, "status": "unverified", "source": "cache"}
+        return {"activated": True, "valid": False, "status": "unverified", "tier": cache.get("tier"), "source": "cache"}
 
     grace_until = last_check + timedelta(days=GRACE_DAYS)
     within_grace = _now() < grace_until
@@ -134,6 +161,7 @@ def _status_from_cache_only(cache: dict) -> dict:
         "valid": bool(cache.get("valid")) and within_grace,
         "status": cache.get("status", "unknown"),
         "expires_at": cache.get("expires_at"),
+        "tier": cache.get("tier", "silver"),
         "source": "cache",
         "grace_until": grace_until.isoformat(),
     }
@@ -147,20 +175,29 @@ def get_status() -> dict:
     frontend, NOT on every single API request (see is_valid_fast below for
     that case, which just reads the cache).
 
-    Returns {activated, valid, status, expires_at, source, grace_until}
+    Returns {activated, valid, status, expires_at, tier, device_fingerprint, source, grace_until}
     - source is "online" if we just confirmed with the license service,
       "cache" if we're relying on a past check within the grace window,
       or "none" if there's no license_key at all yet.
+    - tier is the license edition — "silver" (single device) or "gold"
+      (multi-device, see TIER_DEVICE_LIMIT) — as last reported by the
+      license service. Defaults to "silver" if the service hasn't sent one
+      (e.g. an older key issued before tiers existed), so nothing breaks
+      for existing customers.
+    - device_fingerprint is this machine's id, sent with every check so
+      the license service can enforce a tier's device limit; it's also
+      surfaced in the Account & Billing UI for support/troubleshooting.
     """
     cache = _load_cache()
     license_key = cache.get("license_key")
+    fingerprint = get_device_fingerprint()
     if not license_key:
-        return {"activated": False, "valid": False, "status": "none", "source": "none"}
+        return {"activated": False, "valid": False, "status": "none", "tier": None, "source": "none", "device_fingerprint": fingerprint}
 
     try:
         resp = requests.post(
             f"{LICENSE_SERVICE_URL}/license/check",
-            json={"license_key": license_key},
+            json={"license_key": license_key, "device_fingerprint": fingerprint},
             timeout=REQUEST_TIMEOUT,
         )
         if resp.status_code == 404:
@@ -171,7 +208,27 @@ def get_status() -> dict:
             cache["status"] = "unknown_key"
             cache["last_online_check"] = _now().isoformat()
             _save_cache(cache)
-            return {"activated": True, "valid": False, "status": "unknown_key", "source": "online"}
+            return {"activated": True, "valid": False, "status": "unknown_key", "tier": cache.get("tier"), "source": "online", "device_fingerprint": fingerprint}
+
+        if resp.status_code == 409:
+            # Reserved for the license service to report "this key's
+            # device limit is already full with other machines" once that
+            # enforcement exists server-side. Surfaced distinctly from a
+            # generic invalid key so the UI can point the user at
+            # deactivating a device instead of just "buy a subscription".
+            body = {}
+            try:
+                body = resp.json()
+            except ValueError:
+                pass
+            cache["valid"] = False
+            cache["status"] = "device_limit_reached"
+            cache["last_online_check"] = _now().isoformat()
+            _save_cache(cache)
+            return {
+                "activated": True, "valid": False, "status": "device_limit_reached",
+                "tier": body.get("tier", cache.get("tier")), "source": "online", "device_fingerprint": fingerprint,
+            }
 
         resp.raise_for_status()
         remote = resp.json()
@@ -181,12 +238,16 @@ def get_status() -> dict:
             "valid": remote.get("valid", False),
             "status": remote.get("status"),
             "expires_at": remote.get("expires_at"),
+            "tier": remote.get("tier", "silver"),
             "source": "online",
+            "device_fingerprint": fingerprint,
         }
     except requests.RequestException:
         pass  # no internet, or the service is down — fall back to cache below
 
-    return _status_from_cache_only(cache)
+    result = _status_from_cache_only(cache)
+    result["device_fingerprint"] = fingerprint
+    return result
 
 
 def is_valid_fast() -> bool:

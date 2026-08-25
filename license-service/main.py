@@ -33,6 +33,7 @@ import razorpay
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -59,6 +60,8 @@ try:
         conn.execute(text("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS trial_reminder_sent_at TIMESTAMPTZ"))
         conn.execute(text("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS device_fingerprint VARCHAR"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_licenses_device_fingerprint ON licenses (device_fingerprint)"))
+        conn.execute(text("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS tier VARCHAR DEFAULT 'silver'"))
+        conn.execute(text("UPDATE licenses SET tier = 'silver' WHERE tier IS NULL"))
         conn.commit()
 except Exception as e:
     print(f"[startup] Skipped column migration (likely already applied or non-Postgres DB): {e}")
@@ -66,16 +69,31 @@ except Exception as e:
 TRIAL_DAYS = int(os.environ.get("TRIAL_DAYS", "7"))
 GRACE_DAYS = int(os.environ.get("GRACE_DAYS", "5"))
 
+# Per-tier concurrent-device cap, enforced in /license/check via the
+# license_devices table. Mirrors TIER_DEVICE_LIMIT in the desktop app's
+# license_client.py — that copy is just for UI copy, this one is the
+# actual enforcement.
+TIER_DEVICE_LIMIT = {"silver": 1, "gold": 3}
+DEFAULT_TIER = "silver"
+
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 
-# Two billing intervals, two separate Razorpay Plans. RAZORPAY_PLAN_ID is
-# kept as a fallback alias for RAZORPAY_PLAN_ID_MONTHLY so existing Render
-# deployments configured before yearly billing existed don't break.
+# Two billing intervals x two tiers = four Razorpay Plans. The *_MONTHLY /
+# *_YEARLY (untiered) env vars are kept as fallback aliases for "silver",
+# so existing Render deployments configured before tiers existed keep
+# working without touching their env — they just never sell "gold" until
+# RAZORPAY_PLAN_ID_GOLD_* is set.
 RAZORPAY_PLAN_IDS = {
-    "monthly": os.environ.get("RAZORPAY_PLAN_ID_MONTHLY", os.environ.get("RAZORPAY_PLAN_ID", "")),
-    "yearly": os.environ.get("RAZORPAY_PLAN_ID_YEARLY", ""),
+    "silver": {
+        "monthly": os.environ.get("RAZORPAY_PLAN_ID_SILVER_MONTHLY", os.environ.get("RAZORPAY_PLAN_ID_MONTHLY", os.environ.get("RAZORPAY_PLAN_ID", ""))),
+        "yearly": os.environ.get("RAZORPAY_PLAN_ID_SILVER_YEARLY", os.environ.get("RAZORPAY_PLAN_ID_YEARLY", "")),
+    },
+    "gold": {
+        "monthly": os.environ.get("RAZORPAY_PLAN_ID_GOLD_MONTHLY", ""),
+        "yearly": os.environ.get("RAZORPAY_PLAN_ID_GOLD_YEARLY", ""),
+    },
 }
 # How many billing cycles to authorize upfront, per interval — 120 monthly
 # cycles is ~10 years; 10 yearly cycles is also ~10 years. Razorpay requires
@@ -201,11 +219,18 @@ class TrialStartRequest(BaseModel):
 
 class LicenseCheckRequest(BaseModel):
     license_key: str
+    device_fingerprint: str | None = None
 
 
 class CreateSubscriptionRequest(BaseModel):
     license_key: str
     plan: str = "monthly"  # "monthly" or "yearly"
+    tier: str = "silver"  # "silver" or "gold"
+
+
+class DeactivateDeviceRequest(BaseModel):
+    license_key: str
+    device_fingerprint: str
 
 
 @app.get("/health")
@@ -233,6 +258,9 @@ def admin_list_licenses(token: str, db: Session = Depends(get_db)):
             "email": lic.user.email if lic.user else None,
             "status": lic.status,
             "plan": lic.plan,
+            "tier": lic.tier or DEFAULT_TIER,
+            "device_count": len(lic.devices),
+            "device_limit": TIER_DEVICE_LIMIT.get(lic.tier or DEFAULT_TIER, 1),
             "license_key": lic.license_key,
             "trial_ends_at": _aware(lic.trial_ends_at),
             "current_period_end": _aware(lic.current_period_end),
@@ -348,6 +376,41 @@ def start_trial(request: Request, body: TrialStartRequest, db: Session = Depends
     }
 
 
+def _check_in_device(db: Session, lic: models.License, fingerprint: str) -> bool:
+    """Registers `fingerprint` against `lic` if there's room under its
+    tier's device limit, or just refreshes last_seen if it's already
+    registered. Returns True if the device is (now) allowed, False if a
+    *new* fingerprint would push the license over its tier's limit —
+    caller is responsible for turning False into a 409 and NOT committing
+    any license-validity side effects in that case.
+    """
+    existing = (
+        db.query(models.LicenseDevice)
+        .filter(
+            models.LicenseDevice.license_id == lic.id,
+            models.LicenseDevice.device_fingerprint == fingerprint,
+        )
+        .first()
+    )
+    if existing:
+        existing.last_seen = _now()
+        db.commit()
+        return True
+
+    limit = TIER_DEVICE_LIMIT.get(lic.tier or DEFAULT_TIER, 1)
+    current_count = (
+        db.query(models.LicenseDevice)
+        .filter(models.LicenseDevice.license_id == lic.id)
+        .count()
+    )
+    if current_count >= limit:
+        return False
+
+    db.add(models.LicenseDevice(license_id=lic.id, device_fingerprint=fingerprint))
+    db.commit()
+    return True
+
+
 @app.post("/license/check")
 @limiter.limit("60/minute")
 def check_license(request: Request, body: LicenseCheckRequest, db: Session = Depends(get_db)):
@@ -355,22 +418,45 @@ def check_license(request: Request, body: LicenseCheckRequest, db: Session = Dep
     if not lic:
         raise HTTPException(404, "Unknown license key")
 
+    # Device-limit enforcement only applies to paid tiers actually in use —
+    # a trial license has no device_fingerprint concept beyond the
+    # single-farm-prevention field on License itself, so skip it while
+    # trialing (and if the client didn't send a fingerprint at all, treat
+    # this as an older client and don't newly enforce anything on it).
+    if body.device_fingerprint and lic.status != "trial":
+        allowed = _check_in_device(db, lic, body.device_fingerprint)
+        if not allowed:
+            # NOTE: deliberately a raw JSONResponse, not `raise
+            # HTTPException(detail=...)` — FastAPI nests HTTPException's
+            # detail under a "detail" key, but the desktop client
+            # (license_client.py) reads `tier` off the TOP LEVEL of the
+            # 409 body. Keep this in sync with that client contract.
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": "This key is already active on as many devices as its tier allows.",
+                    "tier": lic.tier or DEFAULT_TIER,
+                },
+            )
+
     valid = _license_is_valid(lic)
     return {
         "valid": valid,
         "status": lic.status,
         "expires_at": _expiry_for(lic),
         "grace_days": GRACE_DAYS,
+        "tier": lic.tier or DEFAULT_TIER,
     }
 
 
 @app.post("/billing/create-subscription")
 def create_subscription(body: CreateSubscriptionRequest, db: Session = Depends(get_db)):
-    interval = body.plan if body.plan in RAZORPAY_PLAN_IDS else "monthly"
-    plan_id = RAZORPAY_PLAN_IDS.get(interval)
+    tier = body.tier if body.tier in TIER_DEVICE_LIMIT else DEFAULT_TIER
+    interval = body.plan if body.plan in ("monthly", "yearly") else "monthly"
+    plan_id = RAZORPAY_PLAN_IDS.get(tier, {}).get(interval)
 
     if not rzp_client or not plan_id:
-        raise HTTPException(500, f"Billing isn't configured for the '{interval}' plan yet")
+        raise HTTPException(500, f"Billing isn't configured for the '{tier}/{interval}' plan yet")
 
     lic = db.query(models.License).filter(models.License.license_key == body.license_key).first()
     if not lic:
@@ -387,7 +473,11 @@ def create_subscription(body: CreateSubscriptionRequest, db: Session = Depends(g
         # duplicate (which risked a double charge if both got paid).
         try:
             existing = rzp_client.subscription.fetch(lic.razorpay_subscription_id)
-            if existing.get("status") in ("created", "authenticated", "pending"):
+            # Only reuse the pending subscription if it's for the SAME plan
+            # the user is asking for now — otherwise someone who started
+            # checkout on silver-monthly and then picked gold-yearly would
+            # get handed the stale silver-monthly checkout link instead.
+            if existing.get("status") in ("created", "authenticated", "pending") and existing.get("plan_id") == plan_id:
                 return {"short_url": existing["short_url"], "subscription_id": existing["id"]}
         except Exception:
             pass  # couldn't fetch it (deleted/invalid) — fall through and create a fresh one
@@ -396,11 +486,12 @@ def create_subscription(body: CreateSubscriptionRequest, db: Session = Depends(g
         "plan_id": plan_id,
         "customer_notify": 1,
         "total_count": RAZORPAY_TOTAL_COUNT.get(interval, 120),
-        "notes": {"license_key": lic.license_key, "plan": interval},
+        "notes": {"license_key": lic.license_key, "plan": interval, "tier": tier},
     })
 
     lic.razorpay_subscription_id = subscription["id"]
     lic.plan = interval
+    lic.tier = tier
     lic.status = "past_due"  # becomes "active" once the webhook confirms the first charge
     db.commit()
 
@@ -447,6 +538,66 @@ def cancel_subscription(body: CancelSubscriptionRequest, db: Session = Depends(g
     mailer.send_subscription_cancelled(lic.user.email if lic.user else None, _aware(lic.current_period_end))
 
     return {"status": "cancelled", "current_period_end": _aware(lic.current_period_end)}
+
+
+@app.get("/license/devices")
+@limiter.limit("30/minute")
+def list_devices(request: Request, license_key: str, db: Session = Depends(get_db)):
+    """Self-serve view of which devices currently hold a slot on this key,
+    so the desktop app's "This device" panel can show the user what to
+    deactivate instead of just quoting a raw limit number."""
+    lic = db.query(models.License).filter(models.License.license_key == license_key).first()
+    if not lic:
+        raise HTTPException(404, "Unknown license key")
+
+    devices = (
+        db.query(models.LicenseDevice)
+        .filter(models.LicenseDevice.license_id == lic.id)
+        .order_by(models.LicenseDevice.last_seen.desc())
+        .all()
+    )
+    limit = TIER_DEVICE_LIMIT.get(lic.tier or DEFAULT_TIER, 1)
+    return {
+        "tier": lic.tier or DEFAULT_TIER,
+        "device_limit": limit,
+        "devices": [
+            {
+                "device_fingerprint": d.device_fingerprint,
+                "first_seen": _aware(d.first_seen),
+                "last_seen": _aware(d.last_seen),
+            }
+            for d in devices
+        ],
+    }
+
+
+@app.post("/license/devices/deactivate")
+@limiter.limit("30/minute")
+def deactivate_device(request: Request, body: DeactivateDeviceRequest, db: Session = Depends(get_db)):
+    """Frees up a device slot on a key — e.g. after retiring/reformatting a
+    machine — without needing to go through support. Anyone who has the
+    license_key can call this (same trust model as every other endpoint
+    here: the key itself is the credential), so the desktop app is free to
+    expose it directly from the Account & Billing page.
+    """
+    lic = db.query(models.License).filter(models.License.license_key == body.license_key).first()
+    if not lic:
+        raise HTTPException(404, "Unknown license key")
+
+    device = (
+        db.query(models.LicenseDevice)
+        .filter(
+            models.LicenseDevice.license_id == lic.id,
+            models.LicenseDevice.device_fingerprint == body.device_fingerprint,
+        )
+        .first()
+    )
+    if not device:
+        raise HTTPException(404, "That device isn't registered on this license")
+
+    db.delete(device)
+    db.commit()
+    return {"ok": True}
 
 
 @app.post("/billing/webhook")
