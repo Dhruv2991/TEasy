@@ -1,6 +1,6 @@
 import re
 from typing import List, Optional, Dict
-from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 import pdfplumber
 import requests
@@ -162,14 +162,28 @@ def extract_bank_transactions(file) -> list[dict]:
                         desc_idx = col_map.get("description", 2 if len(clean_row) > 2 else 1)
                         chq_idx = col_map.get("cheque_no", 3 if len(clean_row) > 3 else None)
 
-                        # Fallback positional indexing if header auto-detection was bypassed
-                        if d_idx is None or c_idx is None:
+                        # Fallback positional indexing — only for whichever
+                        # of debit/credit/balance the header row genuinely
+                        # didn't match. Previously this discarded an index
+                        # that WAS correctly header-matched (e.g. "Cr
+                        # Amount" found, "Dr Amount" not) any time the
+                        # other one was missing, guessing a position for
+                        # BOTH — which could land a fallback index on the
+                        # Balance column and produce a spurious non-zero
+                        # value on both debit and credit for the same row.
+                        if d_idx is None or c_idx is None or b_idx is None:
                             if len(clean_row) >= 8:
-                                d_idx, c_idx, b_idx = 5, 6, 7
+                                fallback_d, fallback_c, fallback_b = 5, 6, 7
                             elif len(clean_row) >= 6:
-                                d_idx, c_idx, b_idx = 3, 4, 5
+                                fallback_d, fallback_c, fallback_b = 3, 4, 5
                             else:
-                                d_idx, c_idx, b_idx = 2, 3, 4
+                                fallback_d, fallback_c, fallback_b = 2, 3, 4
+                            if d_idx is None:
+                                d_idx = fallback_d
+                            if c_idx is None:
+                                c_idx = fallback_c
+                            if b_idx is None:
+                                b_idx = fallback_b
 
                         txn_date = txn_date_candidate
                         description = clean_row[desc_idx] if desc_idx < len(clean_row) else ""
