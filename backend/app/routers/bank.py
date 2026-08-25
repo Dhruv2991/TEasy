@@ -1,6 +1,6 @@
 import re
 from typing import List, Optional, Dict
-from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 import pdfplumber
 import requests
@@ -31,14 +31,23 @@ class BankTransaction(BaseModel):
 # Flexible Date Pattern: Supports DD/MM/YYYY, DD-MM-YYYY, DD-MMM-YYYY, DD/MM/YY
 DATE_REGEX = re.compile(r"^\d{1,2}[/-](?:\d{1,2}|[A-Za-z]{3})[/-]\d{2,4}$")
 
-# Column Keyword Aliases for HDFC, Axis, Bank of Baroda, Union Bank, Karnataka Bank, and SBI
+# Column Keyword Aliases — covers SBI, Bank of Baroda, Union Bank, Axis,
+# Karnataka Bank, and HDFC's real net-banking PDF exports. Matching is
+# substring-based (see detect_column_indices), so these only need to cover
+# the distinctive part of each bank's actual header wording, not an exact
+# full-string match.
 HEADER_ALIASES = {
-    "txn_date": ["txn date", "tran date", "transaction date", "value date", "post date", "date"],
+    "txn_date": ["txn date", "tran date", "transaction date", "value date", "posting date", "post date", "date"],
     "description": ["particulars", "narration", "description", "remarks", "transaction details", "details", "txn description"],
-    "cheque_no": ["chq/ref number", "chqno", "chq no", "cheque no", "instrument no", "ref no", "tran id", "chq/ref no"],
-    "debit": ["withdrawal amount", "withdrawals", "debit", "dr", "dr amount", "withdrawal"],
-    "credit": ["deposit amount", "deposits", "credit", "cr", "cr amount", "deposit"],
-    "balance": ["closing balance", "balance", "bal", "balance (rs.)"]
+    "cheque_no": ["chq/ref number", "chqno", "chq no", "cheque no", "instrument no", "ref no", "reference no", "reference number", "tran id", "chq/ref no", "utr"],
+    "debit": ["withdrawal amount", "withdrawals", "debit amount", "debit", "dr amount", "withdrawal", "dr"],
+    "credit": ["deposit amount", "deposits", "credit amount", "credit", "cr amount", "deposit", "cr"],
+    # A handful of banks (some Union Bank / Karnataka Bank exports) print a
+    # single "Amount" column with a separate Dr/Cr indicator column instead
+    # of two separate Debit/Credit columns.
+    "amount": ["transaction amount", "amount (inr)", "amount(inr)", "amount"],
+    "drcr": ["dr/cr", "cr/dr", "dr / cr", "type"],
+    "balance": ["running balance", "available balance", "avl balance", "avl bal", "closing balance", "balance (rs.)", "balance", "bal"],
 }
 
 
@@ -60,6 +69,29 @@ def parse_amount(val_str: Optional[str]) -> float:
         return 0.0
 
 
+# UPI narrations follow a fairly standard slash-delimited shape:
+# UPI/<purpose code>/<txn id>/<payer or payee name>/<bank IFSC-ish code>/<remark>/
+# extract_party_name() below picks the first "name-looking" token, but
+# without knowing these two token classes it was picking the purpose code
+# (e.g. "P2A") or bank code as if it were the name.
+_UPI_PURPOSE_CODES = {
+    "P2A", "P2P", "P2M", "P2B", "B2B", "B2C", "C2B", "C2M", "M2P", "M2C",
+    "VAM", "UPI", "NEFT", "RTGS", "IMPS", "DR", "CR",
+}
+# Common IFSC bank-code prefixes that show up standalone in UPI narrations
+# (e.g. ".../THIMMAPPA/SBIN/Payment/") — these are 4-letter codes, same
+# shape as some short human names, so this is an explicit finite list
+# rather than a blanket "skip all 4-letter caps" rule (which would wrongly
+# also skip a real name like "RAJU").
+_BANK_IFSC_PREFIXES = {
+    "SBIN", "HDFC", "ICIC", "UTIB", "CNRB", "PUNB", "KKBK", "IOBA", "IDFB",
+    "YESB", "INDB", "UBIN", "BARB", "KARB", "FDRL", "RATN", "IBKL", "CITI",
+    "HSBC", "SCBL", "DBSS", "AIRP", "PYTM", "ORBC", "ANDB", "CORP", "SYNB",
+    "UCBA", "VIJB", "ALLA", "MAHB", "TMBL", "SIBL", "CSBK", "DCBL", "BKID",
+    "IDIB", "PSIB", "UTBI", "AXIS",
+}
+
+
 def extract_party_name(narration: str) -> str:
     if not narration:
         return "SALDEBTOR"
@@ -71,8 +103,18 @@ def extract_party_name(narration: str) -> str:
 
     parts = [p.strip() for p in re.split(r"[-/]", clean) if p.strip()]
     for part in parts:
-        if not part.isdigit() and len(part) > 2 and not re.match(r"^[A-Z0-9]{9,11}$", part):
-            return part
+        if part.isdigit() or len(part) <= 2:
+            continue
+        # Skip UTR/reference-style codes (letters+digits mixed, 9-11
+        # chars) — but only when there's actually a digit in it. Without
+        # requiring a digit, this also matched pure-letter names of the
+        # same length (e.g. "THIMMAPPA" is 9 uppercase letters and would
+        # otherwise get skipped as if it were a reference code).
+        if re.match(r"^[A-Z0-9]{9,11}$", part) and any(ch.isdigit() for ch in part):
+            continue
+        if part.upper() in _UPI_PURPOSE_CODES or part.upper() in _BANK_IFSC_PREFIXES:
+            continue
+        return part
 
     return clean if clean else "SALDEBTOR"
 
@@ -88,6 +130,57 @@ def detect_column_indices(header_row: List[str]) -> Dict[str, int]:
                     mapping[field] = idx
                     break
     return mapping
+
+
+# pdfplumber's default table detection ("lines" strategy) looks for actual
+# drawn cell borders. Several banks' net-banking PDF exports (SBI, Bank of
+# Baroda, Union Bank and Karnataka Bank in particular) print statement
+# tables with faint or entirely absent vertical gridlines, which makes the
+# lines strategy merge two neighbouring columns into a single cell — the
+# classic symptom being one column's digits getting glued onto another's,
+# producing an absurd amount like "₹3,26,21,50,49,492.00" out of what
+# should have been a UTR/reference number sitting next to a normal amount.
+# Axis and HDFC statements usually DO have real gridlines and work fine
+# with the default strategy. Rather than hardcode per-bank behavior, try a
+# couple of extraction strategies per page and keep whichever one actually
+# sliced real transaction rows out cleanly.
+TABLE_STRATEGIES = [
+    {},  # pdfplumber default (lines-based) — correct for Axis/HDFC-style PDFs with real borders
+    {"vertical_strategy": "text", "horizontal_strategy": "text"},  # for PDFs with no real gridlines at all
+    {"vertical_strategy": "text", "horizontal_strategy": "lines"},  # mixed: real row lines, but column separation only inferred from text position
+]
+
+
+def _score_tables(tables: list) -> int:
+    """Rough confidence score for one extraction attempt: how many rows
+    contain a recognizable date in *any* cell. Deliberately checks every
+    cell, not just the first — some banks (e.g. Union Bank's NetBanking
+    export) put a serial number in column 0 and the date in column 1, so
+    scoring on row[0] alone always scores 0 for those layouts and the
+    scorer can't tell a correct extraction from a garbled one."""
+    score = 0
+    for table in tables:
+        for row in table:
+            if not row:
+                continue
+            for cell in row:
+                if DATE_REGEX.match(str(cell or "").strip()):
+                    score += 1
+                    break
+    return score
+
+
+def _best_tables_for_page(page) -> list:
+    best_tables, best_score = [], -1
+    for settings in TABLE_STRATEGIES:
+        try:
+            tables = page.extract_tables(settings) if settings else page.extract_tables()
+        except Exception:
+            continue
+        score = _score_tables(tables)
+        if score > best_score:
+            best_tables, best_score = tables, score
+    return best_tables
 
 
 def get_existing_tally_ledgers(company_name: str) -> dict:
@@ -125,16 +218,42 @@ def get_existing_tally_ledgers(company_name: str) -> dict:
     return {}
 
 
+_SUMMARY_ROW_MARKERS = ("opening balance", "closing balance", "statement summary", "b/f", "brought forward", "carried forward")
+
+
 def extract_bank_transactions(file) -> list[dict]:
     """Runs the actual PDF table extraction. Kept separate from the
     upload endpoint so the parsing logic (dynamic per-bank column
     detection, multi-line description continuation) stays exactly as
-    written, independent of how the results get persisted afterwards."""
+    written, independent of how the results get persisted afterwards.
+
+    Two things make this resilient across very different bank PDF layouts
+    (SBI, Bank of Baroda, Union Bank, Axis, Karnataka Bank, HDFC) instead
+    of being tuned to just one:
+
+    1. _best_tables_for_page() tries a few pdfplumber column-detection
+       strategies per page and keeps whichever actually found real
+       transaction rows — needed because several banks' statements have no
+       real gridlines, which trips up the default strategy. Scoring checks
+       every cell in a row for a date (not just column 0), since some
+       banks put a serial number before the date column.
+    2. Every row's debit/credit is cross-checked against the *running
+       balance column* (current row's balance minus the previous row's).
+       The balance column is by far the least likely column to ever get
+       merged with its neighbour, so whichever side (debit or credit)
+       doesn't match how the balance actually moved gets zeroed or
+       replaced with the balance-derived amount — this is what catches
+       and corrects the "digits from two columns got glued into one giant
+       number" failure mode, regardless of which bank's layout caused it,
+       and regardless of which side (not just the "active" one) ended up
+       holding the garbage.
+    """
     transactions = []
     with pdfplumber.open(file) as pdf:
         col_map = {}
+        prev_balance = None  # carries across pages — it's one running account balance for the whole statement
         for page in pdf.pages:
-            tables = page.extract_tables()
+            tables = _best_tables_for_page(page)
             for table in tables:
                 for row in table:
                     if not row or not any(row):
@@ -144,10 +263,26 @@ def extract_bank_transactions(file) -> list[dict]:
                     clean_row = [str(cell).strip() if cell is not None else "" for cell in row]
                     row_str_full = " ".join(clean_row).lower()
 
-                    # Detect Header Row dynamically across all 5 target banks
+                    # Detect Header Row dynamically across all target banks
                     if ("date" in row_str_full or "particulars" in row_str_full or "narration" in row_str_full) and \
-                       ("balance" in row_str_full or "debit" in row_str_full or "withdrawal" in row_str_full):
+                       ("balance" in row_str_full or "debit" in row_str_full or "withdrawal" in row_str_full or "amount" in row_str_full):
                         col_map = detect_column_indices(clean_row)
+                        continue
+
+                    if any(marker in row_str_full for marker in _SUMMARY_ROW_MARKERS):
+                        # "Opening balance" rows sometimes carry a real date
+                        # and a balance figure, which would otherwise look
+                        # exactly like a (zero-amount, so normally skipped)
+                        # transaction — but do capture the balance itself so
+                        # the very first real transaction still has
+                        # something to cross-check against.
+                        possible_balance = None
+                        for cell in clean_row:
+                            amt = parse_amount(cell)
+                            if amt:
+                                possible_balance = amt
+                        if possible_balance is not None:
+                            prev_balance = possible_balance
                         continue
 
                     # Inspect Date Column
@@ -159,43 +294,71 @@ def extract_bank_transactions(file) -> list[dict]:
                         d_idx = col_map.get("debit")
                         c_idx = col_map.get("credit")
                         b_idx = col_map.get("balance")
+                        amt_idx = col_map.get("amount")
+                        drcr_idx = col_map.get("drcr")
                         desc_idx = col_map.get("description", 2 if len(clean_row) > 2 else 1)
                         chq_idx = col_map.get("cheque_no", 3 if len(clean_row) > 3 else None)
 
-                        # Fallback positional indexing — only for whichever
-                        # of debit/credit/balance the header row genuinely
-                        # didn't match. Previously this discarded an index
-                        # that WAS correctly header-matched (e.g. "Cr
-                        # Amount" found, "Dr Amount" not) any time the
-                        # other one was missing, guessing a position for
-                        # BOTH — which could land a fallback index on the
-                        # Balance column and produce a spurious non-zero
-                        # value on both debit and credit for the same row.
-                        if d_idx is None or c_idx is None or b_idx is None:
+                        # Fallback positional indexing if header auto-detection was bypassed
+                        if d_idx is None and c_idx is None and amt_idx is None:
                             if len(clean_row) >= 8:
-                                fallback_d, fallback_c, fallback_b = 5, 6, 7
+                                d_idx, c_idx, b_idx = 5, 6, 7
                             elif len(clean_row) >= 6:
-                                fallback_d, fallback_c, fallback_b = 3, 4, 5
+                                d_idx, c_idx, b_idx = 3, 4, 5
                             else:
-                                fallback_d, fallback_c, fallback_b = 2, 3, 4
-                            if d_idx is None:
-                                d_idx = fallback_d
-                            if c_idx is None:
-                                c_idx = fallback_c
-                            if b_idx is None:
-                                b_idx = fallback_b
+                                d_idx, c_idx, b_idx = 2, 3, 4
 
                         txn_date = txn_date_candidate
                         description = clean_row[desc_idx] if desc_idx < len(clean_row) else ""
                         chq_no = clean_row[chq_idx] if chq_idx is not None and chq_idx < len(clean_row) else ""
 
-                        debit_raw = clean_row[d_idx] if d_idx is not None and d_idx < len(clean_row) else ""
-                        credit_raw = clean_row[c_idx] if c_idx is not None and c_idx < len(clean_row) else ""
                         balance_raw = clean_row[b_idx] if b_idx is not None and b_idx < len(clean_row) else ""
-
-                        debit = parse_amount(debit_raw)
-                        credit = parse_amount(credit_raw)
                         balance = parse_amount(balance_raw)
+
+                        if amt_idx is not None and d_idx is None and c_idx is None:
+                            # Single "Amount" column + separate Dr/Cr indicator layout
+                            amt_val = parse_amount(clean_row[amt_idx]) if amt_idx < len(clean_row) else 0.0
+                            indicator = (clean_row[drcr_idx] if drcr_idx is not None and drcr_idx < len(clean_row) else "").strip().upper()
+                            if amt_val < 0 or indicator.startswith("D"):
+                                debit, credit = abs(amt_val), 0.0
+                            else:
+                                debit, credit = 0.0, abs(amt_val)
+                        else:
+                            debit_raw = clean_row[d_idx] if d_idx is not None and d_idx < len(clean_row) else ""
+                            credit_raw = clean_row[c_idx] if c_idx is not None and c_idx < len(clean_row) else ""
+                            debit = parse_amount(debit_raw)
+                            credit = parse_amount(credit_raw)
+
+                        # Cross-check against how the running balance actually
+                        # moved. Balance is the least likely column to ever
+                        # get merged with its neighbour, so it's the most
+                        # trustworthy signal available.
+                        #
+                        # IMPORTANT: don't just check whether the "active"
+                        # side (whichever of debit/credit is non-zero)
+                        # matches the delta — also force the OTHER side to
+                        # zero once it does. Otherwise a garbled value that
+                        # leaked into the "wrong" column survives untouched
+                        # whenever the correct column already happens to
+                        # match the balance movement (this is exactly what
+                        # let a corrupted debit slip through even after the
+                        # first version of this cross-check was added).
+                        if prev_balance is not None and balance:
+                            delta = round(balance - prev_balance, 2)
+                            if abs(delta) > 0:
+                                if credit > 0 and abs(credit - delta) <= 2.0:
+                                    debit = 0.0
+                                elif debit > 0 and abs(-debit - delta) <= 2.0:
+                                    credit = 0.0
+                                else:
+                                    # Neither side's column-extracted value
+                                    # matches how the balance actually moved
+                                    # — trust the balance movement entirely
+                                    # rather than either column value.
+                                    debit = -delta if delta < 0 else 0.0
+                                    credit = delta if delta > 0 else 0.0
+                        if balance:
+                            prev_balance = balance
 
                         if debit == 0 and credit == 0:
                             continue
