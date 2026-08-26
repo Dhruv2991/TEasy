@@ -55,6 +55,8 @@ def run_lightweight_migrations():
         "credit": "FLOAT DEFAULT 0.0",
         "narration": "TEXT",
         "approved_at": "DATETIME",
+        "reconciliation_status": "VARCHAR",
+        "matched_transaction_id": "INTEGER",
     }
     with engine.begin() as conn:
         for col_name, col_def in additions.items():

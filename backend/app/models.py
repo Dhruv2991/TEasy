@@ -108,6 +108,16 @@ class Transaction(Base):
     # Tally push tracking: NOT_SENT | SENT | FAILED
     tally_status = Column(String, default="NOT_SENT")
     tally_error = Column(String, nullable=True)
+    # Reconciliation (bank rows only — see reconciliation.py):
+    # "MATCHED" once a BANK row's amount+date lines up with exactly one
+    # confident SALES/PURCHASE invoice; "UNMATCHED" if nothing lines up
+    # (may just mean this bank movement isn't an invoiced sale/purchase at
+    # all — a bank charge, salary, GST payment, owner's drawing, etc. —
+    # not necessarily an error); "AMBIGUOUS" when 2+ same-amount invoices
+    # are close enough in date that auto-matching would be a guess; null
+    # for non-BANK rows, since reconciliation only runs in that direction.
+    reconciliation_status = Column(String, nullable=True)
+    matched_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
 
     bill = relationship("DetectedBill", back_populates="transaction")
 

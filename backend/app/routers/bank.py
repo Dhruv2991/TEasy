@@ -7,6 +7,7 @@ import requests
 
 from ..tally.config import get_tally_config
 from ..settings import get_settings
+from ..reconciliation import reconcile_bank_transactions
 
 router = APIRouter(prefix="/bank", tags=["Bank Statements"])
 
@@ -533,6 +534,7 @@ async def upload_bank_statement(file: UploadFile = File(...), db: Session = Depe
             narration=raw.get("narration") or "",
             confidence=1.0,  # extracted directly from the statement table, not AI-inferred
             status="NEEDS_REVIEW",
+            reconciliation_status="UNMATCHED",  # updated by POST /transactions/reconcile
         )
         db.add(tx)
 
@@ -543,5 +545,21 @@ async def upload_bank_statement(file: UploadFile = File(...), db: Session = Depe
              + (f" ({skipped_zero} row(s) with no detected debit/credit amount were skipped — "
                 f"check the PDF's column layout if this number looks high)" if skipped_zero else ""),
          document_id=doc.id)
+
+    # Auto-reconcile against whatever sales/purchase invoices already exist
+    # so the Reconciled column is already populated by the time the user
+    # opens Review & Approve, instead of showing everything as "Unmatched"
+    # until they remember to click the button themselves. Wrapped in
+    # try/except: reconciliation is a nice-to-have cross-check, not part of
+    # the upload contract — a bug or edge case in it should never turn a
+    # successful statement upload into a failed one.
+    try:
+        stats = reconcile_bank_transactions(db)
+        _log(db, f"Auto-reconciled against existing invoices: {stats['matched']} matched, "
+                 f"{stats['ambiguous']} ambiguous, {stats['unmatched']} unmatched",
+             document_id=doc.id)
+    except Exception as e:
+        _log(db, f"Auto-reconciliation skipped due to an error (statement upload itself succeeded): {e}",
+             document_id=doc.id)
 
     return doc

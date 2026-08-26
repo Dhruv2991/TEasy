@@ -112,6 +112,16 @@ export const api = {
       body: JSON.stringify({ old_name: oldName, new_name: newName, doc_type: docType || null }),
     }),
 
+  // --- Bank <-> invoice reconciliation ---
+  reconcileTransactions: () => req("/transactions/reconcile", { method: "POST" }),
+  getMatchCandidates: (id) => req(`/transactions/${id}/match-candidates`),
+  reconcileManual: (id, matchedTransactionId) =>
+    req(`/transactions/${id}/reconcile-manual`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ matched_transaction_id: matchedTransactionId }),
+    }),
+
   getTallyStatus: () => req("/tally/status"),
   getTallyConfig: () => req("/tally/config"),
   getTallyLedgers: (forceRefresh = false) =>

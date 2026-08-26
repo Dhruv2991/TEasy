@@ -6,12 +6,26 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from .. import models, schemas
+from ..reconciliation import reconcile_bank_transactions, get_match_candidates
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
 
 class BulkActionRequest(BaseModel):
     ids: list[int]
+
+
+def _maybe_reconcile(db: Session) -> None:
+    """Re-runs bank<->invoice reconciliation after a SALES/PURCHASE approval
+    — a newly-approved invoice is a new candidate that might resolve a bank
+    row that was previously UNMATCHED (or make an AMBIGUOUS one resolvable,
+    though that case still needs a human pick either way). Best-effort:
+    reconciliation is a read-only cross-check, never something that should
+    turn a successful approval into a failed one."""
+    try:
+        reconcile_bank_transactions(db)
+    except Exception:
+        pass
 
 
 def _is_duplicate_invoice(
@@ -172,6 +186,8 @@ def approve_transaction(transaction_id: int, db: Session = Depends(get_db)):
         )
     )
     db.commit()
+    if tx.type in ("SALES", "PURCHASE"):
+        _maybe_reconcile(db)
     db.refresh(tx)
     return tx
 
@@ -232,6 +248,8 @@ def bulk_approve_transactions(
         approved_ids.append(tx.id)
 
     db.commit()
+    if any(tx.type in ("SALES", "PURCHASE") for tx in txs if tx.id in approved_ids):
+        _maybe_reconcile(db)
     return {
         "status": "success",
         "approved_count": len(approved_ids),
@@ -376,3 +394,97 @@ def rename_party(payload: RenamePartyRequest, db: Session = Depends(get_db)):
 
     db.commit()
     return {"status": "success", "updated_count": len(updated_ids), "updated_ids": updated_ids}
+
+
+class ManualReconcileRequest(BaseModel):
+    matched_transaction_id: int
+
+
+@router.post("/reconcile")
+def run_reconciliation(db: Session = Depends(get_db)):
+    """
+    Cross-checks every bank-statement row against your recorded sales and
+    purchase invoices — a credit against sales (a customer paid you), a
+    debit against purchases (you paid a supplier) — by amount and date
+    proximity. Read-only: sets reconciliation_status/matched_transaction_id
+    on the bank rows, never touches approval status or Tally.
+
+    Safe to call repeatedly — e.g. wire this up as a button in Review &
+    Approve's Bank Statements tab, or call it automatically after a bank
+    statement upload finishes and after any sales/purchase approval, so the
+    reconciliation view stays current without the user having to remember
+    to trigger it.
+    """
+    stats = reconcile_bank_transactions(db)
+    return {"status": "success", **stats}
+
+
+@router.get("/{transaction_id}/match-candidates")
+def match_candidates(transaction_id: int, db: Session = Depends(get_db)):
+    """
+    For a bank row that's UNMATCHED or AMBIGUOUS, returns the same-amount
+    invoices within the date window so a human can pick the right one (or
+    confirm none of them is right) — this is what the "AMBIGUOUS" status
+    exists for: showing the real choice instead of the code silently
+    guessing between two same-amount invoices.
+    """
+    tx = db.query(models.Transaction).filter(models.Transaction.id == transaction_id).first()
+    if not tx:
+        raise HTTPException(404, "Transaction not found")
+    if tx.type != "BANK":
+        raise HTTPException(400, "match-candidates only applies to BANK transactions")
+
+    candidates = get_match_candidates(db, tx)
+    return {
+        "bank_transaction_id": tx.id,
+        "amount": tx.credit if tx.credit > 0 else tx.debit,
+        "looking_for": "SALES" if tx.credit > 0 else "PURCHASE",
+        "candidates": [
+            {
+                "id": c.id,
+                "party": c.party,
+                "date": c.date,
+                "invoice_number": c.invoice_number,
+                "total_value": c.total_value,
+                "status": c.status,
+            }
+            for c in candidates
+        ],
+    }
+
+
+@router.post("/{transaction_id}/reconcile-manual")
+def reconcile_manual(transaction_id: int, payload: ManualReconcileRequest, db: Session = Depends(get_db)):
+    """
+    Manually links a bank row to a specific invoice — the resolution path
+    for AMBIGUOUS rows (or any UNMATCHED row where the human spots the
+    right invoice by invoice number/narration even though the automatic
+    date-proximity matcher couldn't confidently pick one).
+    """
+    bank_tx = db.query(models.Transaction).filter(models.Transaction.id == transaction_id).first()
+    if not bank_tx:
+        raise HTTPException(404, "Transaction not found")
+    if bank_tx.type != "BANK":
+        raise HTTPException(400, "reconcile-manual only applies to BANK transactions")
+
+    target_type = "SALES" if bank_tx.credit > 0 else "PURCHASE"
+    match = db.query(models.Transaction).filter(
+        models.Transaction.id == payload.matched_transaction_id,
+        models.Transaction.type == target_type,
+        models.Transaction.status != "REJECTED",
+    ).first()
+    if not match:
+        raise HTTPException(404, f"No {target_type.lower()} transaction {payload.matched_transaction_id} found to match against")
+
+    # Freeing up whatever this bank row was matched to before (if anything)
+    # isn't needed here — matched_transaction_id is just overwritten below,
+    # and the next full reconcile() pass will naturally re-derive
+    # used_candidate_ids from what's actually still linked.
+    bank_tx.reconciliation_status = "MATCHED"
+    bank_tx.matched_transaction_id = match.id
+    db.add(models.AuditLog(
+        transaction_id=bank_tx.id,
+        message=f"Manually reconciled against {target_type.lower()} transaction #{match.id} ({match.party}, {match.invoice_number or 'no invoice #'})",
+    ))
+    db.commit()
+    return {"status": "success", "matched_transaction_id": match.id}

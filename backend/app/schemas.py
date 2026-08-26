@@ -29,6 +29,8 @@ class TransactionOut(BaseModel):
     approved_at: Optional[datetime.datetime] = None
     tally_status: str = "NOT_SENT"
     tally_error: Optional[str] = None
+    reconciliation_status: Optional[str] = None
+    matched_transaction_id: Optional[int] = None
 
     class Config:
         from_attributes = True

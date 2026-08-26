@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { api, cropImageUrl } from "./api.js";
-import { StatusBadge, ConfidenceBadge, formatMoney } from "./ui.jsx";
+import { StatusBadge, ConfidenceBadge, ReconciliationBadge, formatMoney } from "./ui.jsx";
 import { Icon } from "./icons.jsx";
 
 // Converts various incoming date formats (DD/MM/YYYY, DD-MM-YYYY, YYYYMMDD) 
@@ -39,6 +39,136 @@ function round2(n) {
 
 function roundRupee(n) {
   return Math.round(Number(n) || 0);
+}
+
+// Lets a human resolve an AMBIGUOUS bank row (or pick a match for an
+// UNMATCHED one) instead of the reconciler guessing between same-amount
+// invoices — see match_candidates() in backend/app/reconciliation.py.
+function MatchPickerModal({ tx, onClose, onMatched }) {
+  const [loading, setLoading] = useState(true);
+  const [candidates, setCandidates] = useState([]);
+  const [error, setError] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getMatchCandidates(tx.id)
+      .then((res) => {
+        if (!cancelled) setCandidates(res.candidates || []);
+      })
+      .catch((e) => !cancelled && setError(e.message))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [tx.id]);
+
+  const pick = async (candidateId) => {
+    setBusyId(candidateId);
+    try {
+      await api.reconcileManual(tx.id, candidateId);
+      onMatched();
+    } catch (e) {
+      setError(e.message);
+      setBusyId(null);
+    }
+  };
+
+  const amount = tx.credit > 0 ? tx.credit : tx.debit;
+  const lookingFor = tx.credit > 0 ? "sales invoice" : "purchase bill";
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-xl border border-slate-200 shadow-xl w-full max-w-lg max-h-[80vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="p-4 border-b border-slate-100">
+          <h3 className="text-sm font-semibold text-slate-900">Match this bank entry</h3>
+          <p className="text-xs text-slate-500 mt-1">
+            Looking for a {lookingFor} worth ₹{formatMoney(amount)}
+            {tx.date ? ` around ${tx.date}` : ""}. {tx.narration && (
+              <span className="italic">"{tx.narration}"</span>
+            )}
+          </p>
+        </div>
+
+        <div className="p-4 space-y-2">
+          {loading && <div className="text-sm text-slate-400 py-4 text-center">Loading candidates…</div>}
+          {error && <div className="text-sm text-rose-600">{error}</div>}
+          {!loading && !error && candidates.length === 0 && (
+            <div className="text-sm text-slate-400 py-4 text-center">
+              No same-amount invoice found within the usual payment window. This bank entry may not
+              correspond to a recorded sale/purchase at all (e.g. a bank charge, salary, GST payment,
+              or owner's drawing) — that's fine, it can stay Unmatched.
+            </div>
+          )}
+          {candidates.map((c) => (
+            <button
+              key={c.id}
+              disabled={busyId !== null}
+              onClick={() => pick(c.id)}
+              className="w-full text-left border border-slate-200 rounded-lg p-3 hover:bg-slate-50 disabled:opacity-50 transition-colors flex items-center justify-between gap-3"
+            >
+              <div>
+                <div className="text-sm font-medium text-slate-900">{c.party}</div>
+                <div className="text-xs text-slate-500">
+                  {c.invoice_number || "No invoice #"} · {c.date || "No date"}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-sm font-semibold text-slate-900">₹{formatMoney(c.total_value)}</div>
+                <div className="text-[10px] text-slate-400">
+                  {busyId === c.id ? "Matching…" : "Select"}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <div className="p-4 border-t border-slate-100 flex justify-end">
+          <button
+            onClick={onClose}
+            disabled={busyId !== null}
+            className="text-xs font-medium border border-slate-300 px-3 py-1.5 rounded-lg hover:bg-slate-100"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReconciliationCell({ tx, onChanged }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const status = tx.reconciliation_status || "UNMATCHED";
+  const needsAttention = status === "AMBIGUOUS" || status === "UNMATCHED";
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <ReconciliationBadge status={status} />
+      {needsAttention && (
+        <button
+          onClick={() => setPickerOpen(true)}
+          className="text-[10px] font-medium text-indigo-600 hover:text-indigo-800 underline underline-offset-2"
+        >
+          {status === "AMBIGUOUS" ? "Resolve" : "Match"}
+        </button>
+      )}
+      {pickerOpen && (
+        <MatchPickerModal
+          tx={tx}
+          onClose={() => setPickerOpen(false)}
+          onMatched={() => {
+            setPickerOpen(false);
+            onChanged();
+          }}
+        />
+      )}
+    </div>
+  );
 }
 
 function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
@@ -338,6 +468,13 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
         <StatusBadge status={tx.status} />
       </td>
       <td className="p-3">
+        {isBank ? (
+          <ReconciliationCell tx={tx} onChanged={onChanged} />
+        ) : (
+          <span className="text-xs text-slate-400">—</span>
+        )}
+      </td>
+      <td className="p-3">
         {tx.tally_status && tx.tally_status !== "NOT_SENT" ? (
           <StatusBadge status={tx.tally_status} />
         ) : (
@@ -465,6 +602,8 @@ export default function ReviewTable({ bills, onChanged }) {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [pushBusy, setPushBusy] = useState(false);
   const [pushResults, setPushResults] = useState([]);
+  const [reconcileBusy, setReconcileBusy] = useState(false);
+  const [reconcileResult, setReconcileResult] = useState(null);
 
   if (!bills.length) {
     return (
@@ -655,6 +794,20 @@ export default function ReviewTable({ bills, onChanged }) {
     }
   };
 
+  const handleReconcile = async () => {
+    setReconcileBusy(true);
+    setReconcileResult(null);
+    try {
+      const result = await api.reconcileTransactions();
+      setReconcileResult(result);
+      onChanged();
+    } catch (e) {
+      alert(`Reconciliation failed: ${e.message}`);
+    } finally {
+      setReconcileBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-3">
       {/* Search / Filter / Export Toolbar */}
@@ -713,6 +866,16 @@ export default function ReviewTable({ bills, onChanged }) {
         </span>
 
         <div className="flex gap-2">
+          {isBankTable && (
+            <button
+              disabled={reconcileBusy}
+              onClick={handleReconcile}
+              title="Cross-checks bank credits/debits against your sales and purchase invoices by amount and date"
+              className="bg-white border border-slate-300 text-slate-700 text-xs font-medium px-3 py-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-40 transition-colors"
+            >
+              {reconcileBusy ? "Reconciling…" : "Reconcile with invoices"}
+            </button>
+          )}
           <button
             disabled={!selectedIds.length || bulkBusy}
             onClick={handleBulkApprove}
@@ -744,6 +907,19 @@ export default function ReviewTable({ bills, onChanged }) {
           </button>
         </div>
       </div>
+
+      {reconcileResult && (
+        <div className="bg-white border border-slate-200 rounded-xl p-3 text-sm text-slate-600">
+          Reconciled: <span className="font-medium text-emerald-700">{reconcileResult.matched} matched</span>
+          {reconcileResult.ambiguous > 0 && (
+            <>, <span className="font-medium text-amber-700">{reconcileResult.ambiguous} ambiguous</span> (needs your pick)</>
+          )}
+          {reconcileResult.unmatched > 0 && (
+            <>, <span className="font-medium text-slate-500">{reconcileResult.unmatched} unmatched</span></>
+          )}
+          {reconcileResult.unchanged > 0 && <>, {reconcileResult.unchanged} unchanged</>}.
+        </div>
+      )}
 
       {pushResults.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-1 text-sm">
@@ -779,6 +955,7 @@ export default function ReviewTable({ bills, onChanged }) {
               <SortHeader colKey="gst_rate">{isBankTable ? "—" : "GST %"}</SortHeader>
               <SortHeader colKey="confidence">Confidence</SortHeader>
               <SortHeader colKey="status">Status</SortHeader>
+              <th className="p-3">Reconciled</th>
               <th className="p-3">Tally</th>
               <th className="p-3">Actions</th>
             </tr>
@@ -805,7 +982,7 @@ export default function ReviewTable({ bills, onChanged }) {
                   <td className="p-3" colSpan={5}>
                     Totals ({sortedBills.length} row{sortedBills.length === 1 ? "" : "s"})
                   </td>
-                  <td className="p-3 text-xs text-slate-500 font-normal" colSpan={5}>
+                  <td className="p-3 text-xs text-slate-500 font-normal" colSpan={6}>
                     Debit ₹{formatMoney(totals.debit)} · Credit ₹{formatMoney(totals.credit)}
                   </td>
                 </>
@@ -818,7 +995,7 @@ export default function ReviewTable({ bills, onChanged }) {
                     </span>
                   </td>
                   <td className="p-3">₹{formatMoney(totals.total)}</td>
-                  <td className="p-3 text-xs text-slate-500 font-normal" colSpan={4}>
+                  <td className="p-3 text-xs text-slate-500 font-normal" colSpan={5}>
                     CGST ₹{formatMoney(totals.cgst)} · SGST ₹{formatMoney(totals.sgst)} · IGST ₹{formatMoney(totals.igst)}
                   </td>
                 </>

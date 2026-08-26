@@ -87,3 +87,27 @@ export function ConfidenceBadge({ value }) {
   const cls = pct >= 90 ? "text-emerald-600" : pct >= 60 ? "text-amber-600" : "text-rose-600";
   return <span className={`font-semibold ${cls}`}>{pct}%</span>;
 }
+
+// For bank rows only — shows whether a bank movement lines up with a
+// sales/purchase invoice already on record. See backend/app/reconciliation.py
+// for what each status actually means.
+export function ReconciliationBadge({ status }) {
+  const styles = {
+    MATCHED: "bg-emerald-100 text-emerald-700",
+    UNMATCHED: "bg-slate-100 text-slate-500",
+    AMBIGUOUS: "bg-amber-100 text-amber-700",
+    "N/A": "bg-slate-50 text-slate-400",
+  };
+  const labels = {
+    MATCHED: "Matched",
+    UNMATCHED: "Unmatched",
+    AMBIGUOUS: "Ambiguous",
+    "N/A": "—",
+  };
+  const key = status || "UNMATCHED";
+  return (
+    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${styles[key] || styles.UNMATCHED}`}>
+      {labels[key] || key}
+    </span>
+  );
+}
