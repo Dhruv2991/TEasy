@@ -8,7 +8,7 @@ export function formatMoney(value) {
   return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export function StatCard({ icon: IconComp, color, label, value, sublabel }) {
+export function StatCard({ icon: IconComp, color, label, value, sublabel, onClick }) {
   const colorMap = {
     green: "bg-emerald-50 text-emerald-600",
     orange: "bg-orange-50 text-orange-600",
@@ -16,8 +16,12 @@ export function StatCard({ icon: IconComp, color, label, value, sublabel }) {
     blue: "bg-blue-50 text-blue-600",
     amber: "bg-amber-50 text-amber-600",
   };
+  const Wrapper = onClick ? "button" : "div";
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-4 flex-1 min-w-[180px]">
+    <Wrapper
+      onClick={onClick}
+      className={`bg-white rounded-xl border border-slate-200 p-4 flex-1 min-w-[180px] text-left ${onClick ? "hover:border-slate-300 hover:shadow-sm transition-shadow cursor-pointer" : ""}`}
+    >
       <div className="flex items-center justify-between mb-3">
         <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${colorMap[color]}`}>
           <IconComp width={20} height={20} />
@@ -26,7 +30,7 @@ export function StatCard({ icon: IconComp, color, label, value, sublabel }) {
       <div className="text-sm text-slate-500">{label}</div>
       <div className="text-2xl font-semibold text-slate-900 mt-0.5">{value}</div>
       {sublabel && <div className="text-xs text-slate-400 mt-1">{sublabel}</div>}
-    </div>
+    </Wrapper>
   );
 }
 

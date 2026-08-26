@@ -67,6 +67,18 @@ export default function DashboardPage({ onNavigate }) {
   const reviewCount = transactions.filter((t) => t.status === "NEEDS_REVIEW").length;
   const rejectedCount = transactions.filter((t) => t.status === "REJECTED").length;
 
+  // Bank rows whose reconciliation_status shows they don't yet line up with
+  // a recorded sales/purchase invoice — see backend/app/reconciliation.py.
+  // REJECTED bank rows are excluded, same as everywhere else on this page.
+  const bankRows = transactions.filter((t) => t.type === "BANK" && t.status !== "REJECTED");
+  const needsReconciliation = bankRows.filter(
+    (t) => t.reconciliation_status === "UNMATCHED" || t.reconciliation_status === "AMBIGUOUS"
+  );
+  const needsReconciliationAmount = needsReconciliation.reduce(
+    (s, t) => s + (t.credit > 0 ? t.credit : t.debit || 0),
+    0
+  );
+
   const handleUpload = async (file, type) => {
     await api.uploadDocument(file, type);
     refresh();
@@ -80,6 +92,16 @@ export default function DashboardPage({ onNavigate }) {
         <StatCard icon={Icon.Gstr2b} color="purple" label="Debit / Credit Notes" value={debitNotes.length} sublabel={`₹${formatMoney(sumTotal(debitNotes))}`} />
         <StatCard icon={Icon.Transactions} color="blue" label="Total Transactions" value={transactions.length} sublabel={`₹${formatMoney(sumTotal(transactions))}`} />
         <StatCard icon={Icon.Alert} color="amber" label="Pending Review" value={pendingReview} sublabel="Requires your action" />
+        {bankRows.length > 0 && (
+          <StatCard
+            icon={Icon.Alert}
+            color="amber"
+            label="Needs Reconciliation"
+            value={needsReconciliation.length}
+            sublabel={needsReconciliation.length ? `₹${formatMoney(needsReconciliationAmount)} unmatched` : "All bank entries reconciled"}
+            onClick={() => onNavigate("bank")}
+          />
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
