@@ -424,6 +424,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models, schemas
 from ..paths import get_data_dir
+from ..settings import get_active_company_id
 
 UPLOAD_DIR = os.path.join(get_data_dir(), "documents")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -455,6 +456,7 @@ async def upload_bank_statement(file: UploadFile = File(...), db: Session = Depe
         shutil.copyfileobj(file.file, f)
 
     doc = models.Document(
+        company_id=get_active_company_id(),
         file_name=file.filename,
         file_path=saved_path,
         document_type="BANK",
@@ -521,12 +523,13 @@ async def upload_bank_statement(file: UploadFile = File(...), db: Session = Depe
         txn_date_iso = _to_iso_date(raw.get("txn_date"))
         balance = raw.get("balance")
 
-        is_dupe = _is_duplicate_bank_row(db, txn_date_iso, debit, credit, balance)
+        is_dupe = _is_duplicate_bank_row(db, txn_date_iso, debit, credit, balance, doc.company_id)
         if is_dupe:
             duplicate_count += 1
 
         tx = models.Transaction(
             bill_id=bill.id,
+            company_id=doc.company_id,
             type="BANK",
             party=party,
             date=txn_date_iso,

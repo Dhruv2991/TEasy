@@ -67,7 +67,15 @@ def reconcile_bank_transactions(db: Session) -> dict:
     """Runs the full matching pass and returns summary counts. Safe to call
     repeatedly (e.g. a button in the UI, or automatically after every bank
     upload/approval) — already-MATCHED rows whose match is still valid are
-    left untouched rather than being re-scored from scratch each time."""
+    left untouched rather than being re-scored from scratch each time.
+
+    Scoped strictly per-company: a bank row can only ever be matched
+    against an invoice from the SAME company_id. Without this, two
+    unrelated companies happening to have a same-amount, same-week invoice
+    could get cross-matched to each other — silently corrupting one
+    company's books with another company's payment. This isn't a
+    theoretical edge case for a bookkeeper managing several clients'
+    accounts side by side in one install; it's the normal case."""
     bank_txns = (
         db.query(models.Transaction)
         .filter(models.Transaction.type == "BANK")
@@ -75,14 +83,15 @@ def reconcile_bank_transactions(db: Session) -> dict:
         .all()
     )
 
-    candidates_by_type: dict[str, list[models.Transaction]] = {"SALES": [], "PURCHASE": []}
+    # Keyed by (type, company_id) rather than just type — see docstring.
+    candidates_by_type: dict[tuple[str, int | None], list[models.Transaction]] = {}
     for t in (
         db.query(models.Transaction)
         .filter(models.Transaction.type.in_(["SALES", "PURCHASE"]))
         .filter(models.Transaction.status != "REJECTED")
         .all()
     ):
-        candidates_by_type[t.type].append(t)
+        candidates_by_type.setdefault((t.type, t.company_id), []).append(t)
 
     # An invoice already claimed by a bank row whose match is still valid
     # (the invoice wasn't rejected/deleted since the last run) can't be
@@ -123,7 +132,7 @@ def reconcile_bank_transactions(db: Session) -> dict:
         bank_date = _parse_date(bt.date)
 
         scored = []
-        for c in candidates_by_type[target_type]:
+        for c in candidates_by_type.get((target_type, bt.company_id), []):
             if c.id in used_candidate_ids:
                 continue
             if abs(c.total_value - amount) > AMOUNT_TOLERANCE:
@@ -164,7 +173,8 @@ def reconcile_bank_transactions(db: Session) -> dict:
 def get_match_candidates(db: Session, bank_tx: models.Transaction) -> list[models.Transaction]:
     """For an AMBIGUOUS (or UNMATCHED) bank row, returns the same-amount
     candidates within the date window so a human can pick the right one
-    (or confirm none of them is right) instead of guessing blind."""
+    (or confirm none of them is right) instead of guessing blind.
+    Same-company only — see reconcile_bank_transactions()'s docstring."""
     amount = bank_tx.credit if bank_tx.credit > 0 else bank_tx.debit
     target_type = "SALES" if bank_tx.credit > 0 else "PURCHASE"
     bank_date = _parse_date(bank_tx.date)
@@ -174,6 +184,7 @@ def get_match_candidates(db: Session, bank_tx: models.Transaction) -> list[model
         db.query(models.Transaction)
         .filter(models.Transaction.type == target_type)
         .filter(models.Transaction.status != "REJECTED")
+        .filter(models.Transaction.company_id == bank_tx.company_id)
         .filter(models.Transaction.total_value.between(amount - AMOUNT_TOLERANCE, amount + AMOUNT_TOLERANCE))
         .all()
     ):

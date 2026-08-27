@@ -19,6 +19,7 @@ from ..tally.tally_client import (
     fetch_ledgers,
     TallyConnectionError,
 )
+from ..settings import get_active_company_id
 
 router = APIRouter(prefix="/tally", tags=["tally"])
 
@@ -29,6 +30,40 @@ def _log(db: Session, message: str, transaction_id: int | None = None):
         db.commit()
     except Exception:
         db.rollback()
+
+
+def _effective_tally_config(db: Session, company_id: int | None = None) -> tuple[dict, models.Company | None]:
+    """
+    Returns the tally config to use for this push, with company_name
+    overridden to the target company's own tally_company_name where one is
+    set. Also returns that Company row itself so callers can scope which
+    transactions are eligible to push.
+
+    `company_id` lets a caller pin this to a SPECIFIC company (e.g. "push
+    this one transaction using its own company's Tally name, regardless of
+    which company happens to be active in the switcher right now") —
+    defaults to the currently active company when omitted, which is what
+    the bulk /push endpoint wants.
+
+    Without this override, every push — regardless of which company is
+    active in the switcher — used a single global company_name from
+    tally_config.json, meaning switching companies never actually changed
+    which Tally company received the voucher. That's the whole point of
+    multi-company support, so this is the one override that actually makes
+    it real rather than cosmetic.
+
+    Falls back to the global company_name when the target company has none
+    set (e.g. an older company created before this field existed) — same
+    behavior as before for anyone not using multi-company at all.
+    """
+    config = dict(get_tally_config())
+    target_id = company_id if company_id is not None else get_active_company_id()
+    company = None
+    if target_id:
+        company = db.query(models.Company).filter(models.Company.id == target_id).first()
+        if company and company.tally_company_name:
+            config["company_name"] = company.tally_company_name
+    return config, company
 
 
 class PushResult(BaseModel):
@@ -67,7 +102,7 @@ def push_approved_transactions(
     payload: schemas.PushToTallyRequest | None = Body(default=None),
     db: Session = Depends(get_db)
 ):
-    config = get_tally_config()
+    config, active_company = _effective_tally_config(db)
 
     # Legacy direct-voucher path: a raw voucher dict with no transaction_id,
     # used by a couple of older callers to push one ad-hoc voucher without a
@@ -95,6 +130,15 @@ def push_approved_transactions(
         models.Transaction.status == "APPROVED",
         models.Transaction.tally_status != "SENT",
     )
+    # Only push the ACTIVE company's approved transactions. Without this, a
+    # single /push call would push every company's pending approvals in one
+    # go, and — combined with SVCURRENTCOMPANY now correctly pointing at
+    # the active company (see _effective_tally_config) — Company A's
+    # sales would get created inside Company B's Tally data if Company B
+    # happened to be the one currently open. Falls back to unscoped (old
+    # single-company behavior) if no company is set up yet.
+    if active_company:
+        base_query = base_query.filter(models.Transaction.company_id == active_company.id)
 
     if explicit_order:
         # The caller (typically a Review & Approve page) already knows the
@@ -213,7 +257,7 @@ def push_single_transaction(transaction_id: int, db: Session = Depends(get_db)):
     if tx.status != "APPROVED":
         raise HTTPException(400, "Only APPROVED transactions can be pushed to Tally")
 
-    config = get_tally_config()
+    config, _active_company = _effective_tally_config(db, company_id=tx.company_id)
     tx_dict = {
         "type": tx.type,
         "party": tx.party,

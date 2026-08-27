@@ -15,6 +15,8 @@ import GstSettingsPage from "./GstSettingsPage.jsx";
 import PartiesPage from "./PartiesPage.jsx";
 import GeneralSettingsPage from "./GeneralSettingsPage.jsx";
 import AccountBillingPage from "./AccountBillingPage.jsx";
+import CompaniesPage from "./CompaniesPage.jsx";
+import CompanySwitcher from "./CompanySwitcher.jsx";
 import FirstRunSetup from "./FirstRunSetup.jsx";
 import LicenseGate from "./LicenseGate.jsx";
 
@@ -35,6 +37,7 @@ const PAGE_META = {
   users: { title: "Users", subtitle: "" },
   "account-billing": { title: "Account & Billing", subtitle: "Manage your TEasy plan" },
   "general-settings": { title: "General Settings", subtitle: "" },
+  companies: { title: "Companies", subtitle: "Manage the businesses this install keeps books for" },
 };
 
 export default function App() {
@@ -43,7 +46,19 @@ export default function App() {
   const [tallyConnected, setTallyConnected] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(null); // null = still checking
   const [license, setLicense] = useState(null); // null = still checking
-  const [companyName, setCompanyName] = useState("");
+  // Bumped whenever the active company changes, and passed as a `key` on
+  // the rendered page below — forces every page component to fully
+  // remount and refetch, since switching companies changes what every
+  // scoped endpoint (transactions, reports, reconciliation) returns.
+  // Without this, the page on screen would keep showing the PREVIOUS
+  // company's already-fetched data until the user manually navigated away
+  // and back, which defeats the point of switching at all.
+  const [companyVersion, setCompanyVersion] = useState(0);
+
+  const handleCompanySwitch = useCallback(() => {
+    setCompanyVersion((v) => v + 1);
+    refreshCounts();
+  }, []);
 
   const checkLicense = useCallback(() => {
     api.getLicenseStatus()
@@ -93,13 +108,6 @@ export default function App() {
     return () => clearInterval(t);
   }, [refreshCounts]);
 
-  useEffect(() => {
-    if (!license?.valid || needsSetup) return;
-    api.getTallyConfig()
-      .then((c) => setCompanyName(c.company_name || ""))
-      .catch(() => setCompanyName(""));
-  }, [license, needsSetup]);
-
   if (license === null) {
     return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">Starting TEasy…</div>;
   }
@@ -146,6 +154,8 @@ export default function App() {
         return <AccountBillingPage />;
       case "general-settings":
         return <GeneralSettingsPage />;
+      case "companies":
+        return <CompaniesPage onCompanyChange={handleCompanySwitch} />;
       default:
         return <ComingSoonPage title={page} />;
     }
@@ -155,8 +165,14 @@ export default function App() {
     <div className="flex bg-slate-50 min-h-screen">
       <Sidebar active={page} onNavigate={setPage} counts={counts} tallyConnected={tallyConnected} />
       <div className="flex-1 min-w-0">
-        <TopBar title={meta.title} subtitle={meta.subtitle} onNavigate={setPage} alertCount={counts.issues} companyName={companyName} />
-        {renderPage()}
+        <TopBar
+          title={meta.title}
+          subtitle={meta.subtitle}
+          onNavigate={setPage}
+          alertCount={counts.issues}
+          CompanySwitcherSlot={<CompanySwitcher onNavigate={setPage} onSwitched={handleCompanySwitch} />}
+        />
+        <div key={companyVersion}>{renderPage()}</div>
       </div>
     </div>
   );

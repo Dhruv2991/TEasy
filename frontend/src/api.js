@@ -170,6 +170,26 @@ export const api = {
   getReportStates: () =>
     req(`/reports/states`),
 
+  // --- Multi-company ---
+  listCompanies: (includeArchived = false) =>
+    req(`/companies${_qs({ include_archived: includeArchived || undefined })}`),
+  getActiveCompany: () => req(`/companies/active`),
+  createCompany: (payload) =>
+    req(`/companies`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  updateCompany: (id, payload) =>
+    req(`/companies/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  activateCompany: (id) => req(`/companies/${id}/activate`, { method: "POST" }),
+  archiveCompany: (id) => req(`/companies/${id}/archive`, { method: "POST" }),
+  unarchiveCompany: (id) => req(`/companies/${id}/unarchive`, { method: "POST" }),
+
 };
 
 export function cropImageUrl(cropPath) {

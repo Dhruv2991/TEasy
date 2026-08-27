@@ -21,6 +21,7 @@ const WORKFLOW_ITEMS = [
 ];
 
 const SETTINGS_ITEMS = [
+  { key: "companies", label: "Companies", icon: Icon.Parties },
   { key: "parties", label: "Parties & Ledgers", icon: Icon.Parties },
   { key: "gst-settings", label: "GST Settings", icon: Icon.Percent },
   { key: "users", label: "Users", icon: Icon.User },

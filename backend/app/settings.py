@@ -26,6 +26,7 @@ DEFAULTS = {
     "gstin": "",
     "state_code": "",
     "default_gst_rate": 18.0,
+    "active_company_id": 0,  # 0 = not set yet; database.py's bootstrap picks a default on first run
 }
 
 
@@ -98,3 +99,12 @@ def has_groq_key() -> bool:
 
 def has_gemini_key() -> bool:
     return bool(get_settings().get("gemini_api_key"))
+
+
+def get_active_company_id() -> int | None:
+    """Returns the id of whichever Company is currently active, or None if
+    somehow unset (shouldn't happen after database.py's bootstrap runs,
+    but callers should still treat None as 'not scoped to any company'
+    rather than crash)."""
+    val = get_settings().get("active_company_id")
+    return int(val) if val else None

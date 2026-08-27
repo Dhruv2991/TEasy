@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from .. import models
+from ..settings import get_active_company_id
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -33,8 +34,14 @@ def _base_query(
     date_from: str | None = None,
     date_to: str | None = None,
     state: str | None = None,
+    company_id: int | None = None,
+    all_companies: bool = False,
 ):
     q = db.query(models.Transaction)
+    if not all_companies:
+        scope_id = company_id if company_id is not None else get_active_company_id()
+        if scope_id:
+            q = q.filter(models.Transaction.company_id == scope_id)
     if doc_type:
         real_types = _DOC_TYPE_ALIASES.get(doc_type.upper(), [doc_type.upper()])
         q = q.filter(models.Transaction.type.in_(real_types))
@@ -65,10 +72,12 @@ def summary(
     date_from: str | None = Query(None, description="Inclusive lower bound, YYYY-MM-DD"),
     date_to: str | None = Query(None, description="Inclusive upper bound, YYYY-MM-DD"),
     state: str | None = Query(None, description="Party's GST state, e.g. 'Karnataka' — see /reports/states for the list actually present"),
+    company_id: int | None = Query(None, description="Defaults to the currently active company"),
+    all_companies: bool = Query(False, description="Bypass company scoping — cross-company admin view only"),
     db: Session = Depends(get_db),
 ):
     """Headline totals: taxable value, tax breakup, total value, count."""
-    rows = _base_query(db, doc_type, status, date_from, date_to, state).all()
+    rows = _base_query(db, doc_type, status, date_from, date_to, state, company_id, all_companies).all()
     out = {
         "count": len(rows),
         "taxable_value": 0.0,
@@ -103,10 +112,12 @@ def by_month(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     state: str | None = Query(None),
+    company_id: int | None = Query(None),
+    all_companies: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """Taxable value + total value grouped by YYYY-MM, sorted chronologically."""
-    rows = _base_query(db, doc_type, status, date_from, date_to, state).all()
+    rows = _base_query(db, doc_type, status, date_from, date_to, state, company_id, all_companies).all()
     buckets = defaultdict(lambda: {"taxable_value": 0.0, "total_value": 0.0, "count": 0})
     for tx in rows:
         # date is stored as free text (ISO where possible); fall back to "Unknown"
@@ -136,10 +147,12 @@ def by_party(
     date_to: str | None = Query(None),
     state: str | None = Query(None),
     limit: int = Query(20, ge=1, le=200),
+    company_id: int | None = Query(None),
+    all_companies: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """Taxable value + total value grouped by party, largest first."""
-    rows = _base_query(db, doc_type, status, date_from, date_to, state).all()
+    rows = _base_query(db, doc_type, status, date_from, date_to, state, company_id, all_companies).all()
     buckets = defaultdict(lambda: {"taxable_value": 0.0, "total_value": 0.0, "count": 0})
     for tx in rows:
         b = buckets[tx.party or "Cash"]
@@ -161,10 +174,12 @@ def by_gst_rate(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     state: str | None = Query(None),
+    company_id: int | None = Query(None),
+    all_companies: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """Taxable value + tax breakup grouped by GST rate slab — useful for a GSTR-style summary."""
-    rows = _base_query(db, doc_type, status, date_from, date_to, state).all()
+    rows = _base_query(db, doc_type, status, date_from, date_to, state, company_id, all_companies).all()
     buckets = defaultdict(lambda: {
         "taxable_value": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0, "cess": 0.0, "count": 0,
     })
@@ -196,6 +211,8 @@ def by_state(
     status: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
+    company_id: int | None = Query(None),
+    all_companies: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """
@@ -206,7 +223,7 @@ def by_state(
     fall into the "Unknown" bucket rather than being silently dropped or
     guessed at.
     """
-    rows = _base_query(db, doc_type, status, date_from, date_to, state=None).all()
+    rows = _base_query(db, doc_type, status, date_from, date_to, state=None, company_id=company_id, all_companies=all_companies).all()
     buckets = defaultdict(lambda: {"taxable_value": 0.0, "total_value": 0.0, "count": 0})
     for tx in rows:
         b = buckets[tx.party_state or "Unknown"]
@@ -222,16 +239,22 @@ def by_state(
 
 
 @router.get("/states")
-def list_states(db: Session = Depends(get_db)):
+def list_states(
+    company_id: int | None = Query(None),
+    all_companies: bool = Query(False),
+    db: Session = Depends(get_db),
+):
     """Distinct party_state values actually present on non-rejected
     transactions, for populating the state filter dropdown — only states
     with at least one real transaction show up, instead of listing all ~38
     GST states/UTs regardless of whether any are relevant to this shop."""
-    rows = (
-        db.query(models.Transaction.party_state)
-        .filter(models.Transaction.party_state.isnot(None))
-        .filter(models.Transaction.status != "REJECTED")
-        .distinct()
-        .all()
+    q = db.query(models.Transaction.party_state).filter(
+        models.Transaction.party_state.isnot(None),
+        models.Transaction.status != "REJECTED",
     )
+    if not all_companies:
+        scope_id = company_id if company_id is not None else get_active_company_id()
+        if scope_id:
+            q = q.filter(models.Transaction.company_id == scope_id)
+    rows = q.distinct().all()
     return sorted(r[0] for r in rows if r[0])

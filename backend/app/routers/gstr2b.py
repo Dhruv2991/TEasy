@@ -12,6 +12,7 @@ from ..gst_states import gstin_to_state
 from ..paths import get_data_dir
 from ..gstr2b.parser import parse_gstr2b_excel
 from .transactions import _is_duplicate_invoice
+from ..settings import get_active_company_id
 
 router = APIRouter(prefix="/gstr2b", tags=["gstr2b"])
 
@@ -36,6 +37,7 @@ def upload_gstr2b(file: UploadFile = File(...), db: Session = Depends(get_db)):
         shutil.copyfileobj(file.file, f)
 
     doc = models.Document(
+        company_id=get_active_company_id(),
         file_name=file.filename,
         file_path=saved_path,
         document_type="GSTR2B",
@@ -89,6 +91,7 @@ def upload_gstr2b(file: UploadFile = File(...), db: Session = Depends(get_db)):
         tx_type = "CREDIT_NOTE" if "credit" in row.note_type.lower() else "DEBIT_NOTE"
 
         tx = models.Transaction(
+            company_id=doc.company_id,
             bill_id=bill.id,
             type=tx_type,
             party=row.supplier_name,
@@ -314,6 +317,7 @@ def upload_gstr2b_purchase(file: UploadFile = File(...), db: Session = Depends(g
         shutil.copyfileobj(file.file, f)
 
     doc = models.Document(
+        company_id=get_active_company_id(),
         file_name=file.filename,
         file_path=saved_path,
         document_type="PURCHASE",
@@ -352,6 +356,7 @@ def upload_gstr2b_purchase(file: UploadFile = File(...), db: Session = Depends(g
         db.refresh(bill)
 
         tx = models.Transaction(
+            company_id=doc.company_id,
             bill_id=bill.id,
             type="PURCHASE",
             party=row.supplier_name,
@@ -424,6 +429,7 @@ def upload_sales_excel(file: UploadFile = File(...), db: Session = Depends(get_d
         shutil.copyfileobj(file.file, f)
 
     doc = models.Document(
+        company_id=get_active_company_id(),
         file_name=file.filename,
         file_path=saved_path,
         document_type="SALES",
@@ -462,6 +468,7 @@ def upload_sales_excel(file: UploadFile = File(...), db: Session = Depends(get_d
         db.refresh(bill)
 
         tx = models.Transaction(
+            company_id=doc.company_id,
             bill_id=bill.id,
             type="SALES",
             party=row.party,

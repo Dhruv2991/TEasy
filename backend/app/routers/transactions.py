@@ -1,12 +1,13 @@
 import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from .. import models, schemas
 from ..reconciliation import reconcile_bank_transactions, get_match_candidates
+from ..settings import get_active_company_id
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
@@ -72,10 +73,11 @@ def _is_duplicate_bank_row(
     debit: float,
     credit: float,
     balance: float,
+    company_id: int | None = None,
 ) -> bool:
     """
     True if a BANK row with this exact date + debit + credit + balance
-    combination already exists (and isn't rejected).
+    combination already exists for the same company (and isn't rejected).
 
     Bank rows have no invoice number to key off, so the fingerprint here is
     the running balance instead — it's the one column a bank statement
@@ -86,21 +88,25 @@ def _is_duplicate_bank_row(
     what actually pins down "this is literally the same statement line",
     which is what re-uploading the same PDF (or an overlapping date range
     across two statements) would produce.
+
+    Scoped to company_id — two unrelated companies' banks could coincidentally
+    produce an identical-looking row (same date/amount/balance is astronomically
+    unlikely but not the point here; what matters is a Company A statement
+    should never be flagged against Company B's data at all).
     """
     if not date or balance is None:
         return False
-    return db.query(
-        db.query(models.Transaction)
-        .filter(
-            models.Transaction.type == "BANK",
-            models.Transaction.date == date,
-            models.Transaction.debit == debit,
-            models.Transaction.credit == credit,
-            models.Transaction.balance == balance,
-            models.Transaction.status != "REJECTED",
-        )
-        .exists()
-    ).scalar()
+    q = db.query(models.Transaction).filter(
+        models.Transaction.type == "BANK",
+        models.Transaction.date == date,
+        models.Transaction.debit == debit,
+        models.Transaction.credit == credit,
+        models.Transaction.balance == balance,
+        models.Transaction.status != "REJECTED",
+    )
+    if company_id:
+        q = q.filter(models.Transaction.company_id == company_id)
+    return db.query(q.exists()).scalar()
 
 
 def _validate_sales_tx(tx: models.Transaction) -> list[str]:
@@ -152,10 +158,19 @@ def _validate_sales_tx(tx: models.Transaction) -> list[str]:
 
 
 @router.get("", response_model=list[schemas.TransactionOut])
-def list_transactions(status: str | None = None, db: Session = Depends(get_db)):
+def list_transactions(
+    status: str | None = None,
+    company_id: int | None = Query(None, description="Defaults to the currently active company; pass explicitly to see another company's data"),
+    all_companies: bool = Query(False, description="Bypass company scoping entirely — for cross-company admin views only"),
+    db: Session = Depends(get_db),
+):
     q = db.query(models.Transaction)
     if status:
         q = q.filter(models.Transaction.status == status)
+    if not all_companies:
+        scope_id = company_id if company_id is not None else get_active_company_id()
+        if scope_id:
+            q = q.filter(models.Transaction.company_id == scope_id)
     return q.order_by(models.Transaction.id.desc()).all()
 
 
@@ -509,9 +524,10 @@ def reconcile_manual(transaction_id: int, payload: ManualReconcileRequest, db: S
         models.Transaction.id == payload.matched_transaction_id,
         models.Transaction.type == target_type,
         models.Transaction.status != "REJECTED",
+        models.Transaction.company_id == bank_tx.company_id,  # never let a manual match cross companies
     ).first()
     if not match:
-        raise HTTPException(404, f"No {target_type.lower()} transaction {payload.matched_transaction_id} found to match against")
+        raise HTTPException(404, f"No {target_type.lower()} transaction {payload.matched_transaction_id} found to match against (in the same company as this bank entry)")
 
     # Freeing up whatever this bank row was matched to before (if anything)
     # isn't needed here — matched_transaction_id is just overwritten below,
