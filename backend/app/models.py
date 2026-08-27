@@ -1,7 +1,7 @@
 """
 ORM models. Kept intentionally close to the schema in the project design doc
-(documents, detected_bills, ocr_results, transactions, audit_logs, companies) trimmed
-to what Phase 1 (Sales pipeline) and multi-company operations require.
+(documents, detected_bills, ocr_results, transactions, audit_logs) but trimmed
+to what Phase 1 (Sales pipeline) actually needs.
 """
 import datetime
 from sqlalchemy import (
@@ -51,26 +51,10 @@ class OcrResult(Base):
     bill = relationship("DetectedBill", back_populates="ocr_result")
 
 
-class Company(Base):
-    __tablename__ = "companies"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    tally_company_name = Column(String, nullable=True)
-    gstin = Column(String, nullable=True)
-    state_code = Column(String, nullable=True)
-    default_gst_rate = Column(Float, default=18.0)
-    archived = Column(Boolean, default=False)  # Matches models.Company.archived in router
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-
-    transactions = relationship("Transaction", back_populates="company")
-
-
 class Transaction(Base):
     __tablename__ = "transactions"
 
     id = Column(Integer, primary_key=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
     bill_id = Column(Integer, ForeignKey("detected_bills.id"))
     type = Column(String, default="SALES")
     party = Column(String, default="Cash")
@@ -143,7 +127,6 @@ class Transaction(Base):
     matched_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
 
     bill = relationship("DetectedBill", back_populates="transaction")
-    company = relationship("Company", back_populates="transactions")
 
 
 class AuditLog(Base):
