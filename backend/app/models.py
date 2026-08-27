@@ -97,6 +97,13 @@ class Transaction(Base):
     # is non-zero per row, mirroring the statement itself.
     debit = Column(Float, default=0.0)
     credit = Column(Float, default=0.0)
+    balance = Column(Float, nullable=True)  # BANK rows only — the statement's running balance after this row; used for reconciliation's balance cross-check and for duplicate-upload detection
+    # Populated where the source actually carries a GSTIN (GSTR-2B purchase
+    # imports and credit/debit notes) — plain OCR'd sales/purchase photos
+    # and hand-entered rows won't have one, so party_state stays null for
+    # those. See gst_states.py for how party_state is derived from it.
+    party_gstin = Column(String, nullable=True)
+    party_state = Column(String, nullable=True)
     narration = Column(Text, nullable=True)
     # Timestamp set the moment a transaction is approved (single or bulk).
     # Used as the default "approved order" when pushing to Tally — pushing

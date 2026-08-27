@@ -14,6 +14,7 @@ function PurchaseRegisterCompare({ onResolved }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
+  const [showUnmatched, setShowUnmatched] = useState(false);
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
@@ -22,6 +23,7 @@ function PurchaseRegisterCompare({ onResolved }) {
     setBusy(true);
     setError("");
     setResult(null);
+    setShowUnmatched(false);
     try {
       const res = await api.matchPurchaseRegister(file);
       setResult(res);
@@ -69,11 +71,51 @@ function PurchaseRegisterCompare({ onResolved }) {
             </p>
           )}
           {result.unmatched_register_rows > 0 && (
-            <p className="text-slate-500">
-              {result.unmatched_register_rows} row(s) in the register file didn't match any purchase
-              already on file (different period, or that supplier hasn't been imported from GSTR-2B
-              yet).
-            </p>
+            <div className="text-slate-600">
+              <p>
+                <span className="font-semibold text-amber-700">{result.unmatched_register_rows}</span> invoice(s)
+                in your register weren't found in GSTR-2B —{" "}
+                <button
+                  type="button"
+                  onClick={() => setShowUnmatched((v) => !v)}
+                  className="underline underline-offset-2 text-indigo-600 hover:text-indigo-800 font-medium"
+                >
+                  {showUnmatched ? "hide" : "see which ones"}
+                </button>
+              </p>
+              {showUnmatched && (
+                <div className="mt-2 border border-amber-200 bg-amber-50 rounded-lg overflow-hidden">
+                  <div className="px-3 py-2 text-xs text-amber-800 border-b border-amber-200">
+                    These are invoices you already paid and recorded, but GSTR-2B doesn't show them yet —
+                    usually because the supplier hasn't uploaded/filed that invoice on GSTN. Input tax
+                    credit on these isn't currently claimable until they do; worth following up with the
+                    supplier before this filing period closes.
+                  </div>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-amber-700">
+                        <th className="px-3 py-1.5 font-medium">Supplier</th>
+                        <th className="px-3 py-1.5 font-medium">Invoice #</th>
+                        <th className="px-3 py-1.5 font-medium">Date</th>
+                        <th className="px-3 py-1.5 font-medium text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.unmatched_register_rows_detail?.map((row, i) => (
+                        <tr key={i} className="border-t border-amber-200/60">
+                          <td className="px-3 py-1.5">{row.supplier_name || "—"}</td>
+                          <td className="px-3 py-1.5">{row.invoice_number}</td>
+                          <td className="px-3 py-1.5">{row.invoice_date || "—"}</td>
+                          <td className="px-3 py-1.5 text-right">
+                            ₹{row.total_value?.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}

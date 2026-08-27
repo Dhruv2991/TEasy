@@ -8,6 +8,7 @@ import requests
 from ..tally.config import get_tally_config
 from ..settings import get_settings
 from ..reconciliation import reconcile_bank_transactions
+from .transactions import _is_duplicate_bank_row
 
 router = APIRouter(prefix="/bank", tags=["Bank Statements"])
 
@@ -492,6 +493,7 @@ async def upload_bank_statement(file: UploadFile = File(...), db: Session = Depe
     # get_existing_tally_ledgers() call also means one less Tally API round
     # trip (and one less thing that can fail) on every bank statement upload.
     skipped_zero = 0
+    duplicate_count = 0
     for idx, raw in enumerate(raw_transactions):
         debit = float(raw.get("debit") or 0.0)
         credit = float(raw.get("credit") or 0.0)
@@ -516,12 +518,18 @@ async def upload_bank_statement(file: UploadFile = File(...), db: Session = Depe
         db.refresh(bill)
 
         party = (raw.get("particulars") or "SALDEBTOR").strip() or "SALDEBTOR"
+        txn_date_iso = _to_iso_date(raw.get("txn_date"))
+        balance = raw.get("balance")
+
+        is_dupe = _is_duplicate_bank_row(db, txn_date_iso, debit, credit, balance)
+        if is_dupe:
+            duplicate_count += 1
 
         tx = models.Transaction(
             bill_id=bill.id,
             type="BANK",
             party=party,
-            date=_to_iso_date(raw.get("txn_date")),
+            date=txn_date_iso,
             invoice_number=raw.get("cheque_no") or None,
             taxable_value=0.0,
             gst_rate=0.0,
@@ -531,10 +539,12 @@ async def upload_bank_statement(file: UploadFile = File(...), db: Session = Depe
             total_value=credit if credit > 0 else debit,
             debit=debit,
             credit=credit,
+            balance=balance,
             narration=raw.get("narration") or "",
             confidence=1.0,  # extracted directly from the statement table, not AI-inferred
             status="NEEDS_REVIEW",
             reconciliation_status="UNMATCHED",  # updated by POST /transactions/reconcile
+            possible_duplicate=is_dupe,
         )
         db.add(tx)
 
@@ -543,7 +553,11 @@ async def upload_bank_statement(file: UploadFile = File(...), db: Session = Depe
     db.refresh(doc)
     _log(db, f"Parsed {len(raw_transactions)} bank transaction(s), ready for review"
              + (f" ({skipped_zero} row(s) with no detected debit/credit amount were skipped — "
-                f"check the PDF's column layout if this number looks high)" if skipped_zero else ""),
+                f"check the PDF's column layout if this number looks high)" if skipped_zero else "")
+             + (f" | ⚠ {duplicate_count} row(s) look like an exact repeat of a transaction already on file "
+                f"(same date, debit, credit, and running balance) — flagged as possible_duplicate rather than "
+                f"silently imported, likely from re-uploading the same statement or an overlapping date range"
+                if duplicate_count else ""),
          document_id=doc.id)
 
     # Auto-reconcile against whatever sales/purchase invoices already exist

@@ -57,6 +57,9 @@ def run_lightweight_migrations():
         "approved_at": "DATETIME",
         "reconciliation_status": "VARCHAR",
         "matched_transaction_id": "INTEGER",
+        "balance": "FLOAT",
+        "party_gstin": "VARCHAR",
+        "party_state": "VARCHAR",
     }
     with engine.begin() as conn:
         for col_name, col_def in additions.items():

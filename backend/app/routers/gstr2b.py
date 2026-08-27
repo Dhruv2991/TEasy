@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from .. import models, schemas
+from ..gst_states import gstin_to_state
 from ..paths import get_data_dir
 from ..gstr2b.parser import parse_gstr2b_excel
 from .transactions import _is_duplicate_invoice
@@ -102,6 +103,8 @@ def upload_gstr2b(file: UploadFile = File(...), db: Session = Depends(get_db)):
             total_value=row.note_value,
             confidence=1.0,  # deterministic parse of a structured government file, not an OCR guess
             status="NEEDS_REVIEW",
+            party_gstin=row.supplier_gstin,
+            party_state=gstin_to_state(row.supplier_gstin),
         )
         db.add(tx)
         db.commit()
@@ -243,6 +246,12 @@ def match_purchase_register(db: Session = Depends(get_db), file: UploadFile = Fi
         tx.rate_breakdown_source = file.filename
         was_uncertain = tx.gst_rate_uncertain
         tx.gst_rate_uncertain = False
+        if not tx.party_gstin and register_row.supplier_gstin:
+            # Backfill for older purchases imported before party_gstin
+            # existed on the model, or from a GSTR-2B row whose GSTIN cell
+            # was blank — the register file sometimes has it even then.
+            tx.party_gstin = register_row.supplier_gstin
+            tx.party_state = gstin_to_state(register_row.supplier_gstin)
         db.commit()
         db.refresh(tx)
         resolved_count += 1
@@ -256,11 +265,23 @@ def match_purchase_register(db: Session = Depends(get_db), file: UploadFile = Fi
                  f"({len(match.rate_breakdown)} rate(s)): {rate_summary}", transaction_id=tx.id)
 
     still_uncertain = sum(1 for tx in purchase_txs if tx.gst_rate_uncertain and not tx.rate_breakdown)
-    unmatched_register_rows = len(set(by_invoice.keys()) - matched_invoice_keys)
+    unmatched_keys = set(by_invoice.keys()) - matched_invoice_keys
+    unmatched_register_rows = len(unmatched_keys)
+    unmatched_detail = [
+        schemas.UnmatchedRegisterRow(
+            invoice_number=by_invoice[key].invoice_number,
+            supplier_name=by_invoice[key].supplier_name,
+            supplier_gstin=by_invoice[key].supplier_gstin,
+            invoice_date=by_invoice[key].invoice_date,
+            total_value=by_invoice[key].total_value,
+        )
+        for key in unmatched_keys
+    ]
 
     _log(db, f"Purchase register '{file.filename}': {resolved_count} invoice(s) resolved, "
              f"{still_uncertain} still uncertain, {unmatched_register_rows} register row(s) had no matching "
-             f"GSTR-2B purchase on file"
+             f"GSTR-2B purchase on file — these may be invoices your supplier(s) haven't filed on GSTN yet, "
+             f"which puts ITC on them at risk until they do"
              + (f" | {len(duplicate_invoice_numbers)} duplicate invoice number(s) in the register file were skipped" if duplicate_invoice_numbers else ""))
 
     return schemas.PurchaseRegisterMatchResult(
@@ -269,6 +290,7 @@ def match_purchase_register(db: Session = Depends(get_db), file: UploadFile = Fi
         resolved=resolved_count,
         still_uncertain=still_uncertain,
         unmatched_register_rows=unmatched_register_rows,
+        unmatched_register_rows_detail=unmatched_detail,
         rows=result_rows,
     )
 
@@ -345,6 +367,8 @@ def upload_gstr2b_purchase(file: UploadFile = File(...), db: Session = Depends(g
             total_value=row.invoice_value,
             confidence=1.0,
             status="NEEDS_REVIEW",
+            party_gstin=row.supplier_gstin,
+            party_state=gstin_to_state(row.supplier_gstin),
         )
         db.add(tx)
         db.commit()

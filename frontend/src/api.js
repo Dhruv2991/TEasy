@@ -165,6 +165,10 @@ export const api = {
     req(`/reports/by-party${_qs(params)}`),
   getReportByGstRate: (params = {}) =>
     req(`/reports/by-gst-rate${_qs(params)}`),
+  getReportByState: (params = {}) =>
+    req(`/reports/by-state${_qs(params)}`),
+  getReportStates: () =>
+    req(`/reports/states`),
 
 };
 

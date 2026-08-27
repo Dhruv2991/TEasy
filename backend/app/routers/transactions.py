@@ -66,6 +66,43 @@ def _is_duplicate_invoice(
     return db.query(query.exists()).scalar()
 
 
+def _is_duplicate_bank_row(
+    db: Session,
+    date: str | None,
+    debit: float,
+    credit: float,
+    balance: float,
+) -> bool:
+    """
+    True if a BANK row with this exact date + debit + credit + balance
+    combination already exists (and isn't rejected).
+
+    Bank rows have no invoice number to key off, so the fingerprint here is
+    the running balance instead — it's the one column a bank statement
+    can't repeat by coincidence the way an amount or date alone easily
+    could (e.g. two unrelated ₹500 UPI payments on the same day are
+    completely normal and NOT duplicates of each other, but they'll have
+    different balances). The combination of date+debit+credit+balance is
+    what actually pins down "this is literally the same statement line",
+    which is what re-uploading the same PDF (or an overlapping date range
+    across two statements) would produce.
+    """
+    if not date or balance is None:
+        return False
+    return db.query(
+        db.query(models.Transaction)
+        .filter(
+            models.Transaction.type == "BANK",
+            models.Transaction.date == date,
+            models.Transaction.debit == debit,
+            models.Transaction.credit == credit,
+            models.Transaction.balance == balance,
+            models.Transaction.status != "REJECTED",
+        )
+        .exists()
+    ).scalar()
+
+
 def _validate_sales_tx(tx: models.Transaction) -> list[str]:
     """Safety gate for handwritten sales: checks required fields, AI confidence, and tax math.
 

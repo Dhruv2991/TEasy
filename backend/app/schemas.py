@@ -25,12 +25,15 @@ class TransactionOut(BaseModel):
     rate_breakdown_source: Optional[str] = None
     debit: float = 0.0
     credit: float = 0.0
+    balance: Optional[float] = None
     narration: Optional[str] = None
     approved_at: Optional[datetime.datetime] = None
     tally_status: str = "NOT_SENT"
     tally_error: Optional[str] = None
     reconciliation_status: Optional[str] = None
     matched_transaction_id: Optional[int] = None
+    party_gstin: Optional[str] = None
+    party_state: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -51,12 +54,26 @@ class RegisterMatchRow(BaseModel):
     reason: str
 
 
+class UnmatchedRegisterRow(BaseModel):
+    """A purchase-register invoice that GSTR-2B doesn't have on file at
+    all — the real ITC-risk signal: it usually means the supplier hasn't
+    uploaded/filed that invoice on GSTN yet, so this purchase can't
+    currently be claimed as input tax credit even though the business
+    already paid for it and recorded it in its own books."""
+    invoice_number: str
+    supplier_name: Optional[str] = None
+    supplier_gstin: Optional[str] = None
+    invoice_date: Optional[str] = None
+    total_value: float
+
+
 class PurchaseRegisterMatchResult(BaseModel):
     total_purchase_transactions: int
     uncertain_before: int
     resolved: int
     still_uncertain: int
     unmatched_register_rows: int
+    unmatched_register_rows_detail: List[UnmatchedRegisterRow] = []
     rows: List[RegisterMatchRow] = []
 
 
