@@ -57,6 +57,10 @@ class Company(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     tally_company_name = Column(String, nullable=True)
+    gstin = Column(String, nullable=True)
+    state_code = Column(String, nullable=True)
+    default_gst_rate = Column(Float, default=18.0)
+    archived = Column(Boolean, default=False)  # Matches models.Company.archived in router
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     transactions = relationship("Transaction", back_populates="company")

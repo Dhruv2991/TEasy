@@ -16,7 +16,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .database import engine, Base, run_lightweight_migrations
-from .routers import documents, transactions, gstr2b, tally, activity, settings as settings_router, reports, license as license_router
+from .routers import (
+    documents,
+    transactions,
+    gstr2b,
+    tally,
+    activity,
+    settings as settings_router,
+    reports,
+    license as license_router,
+    companies,  # Added companies router
+)
 from .paths import get_data_dir, get_frontend_dir
 from .security import license_client
 
@@ -47,6 +57,7 @@ app.include_router(settings_router.router)
 app.include_router(bank.router)
 app.include_router(reports.router)
 app.include_router(license_router.router)
+app.include_router(companies.router)  # Registered companies router
 
 @app.get("/api/status")
 def status():
