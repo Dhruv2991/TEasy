@@ -1,7 +1,7 @@
 """
 ORM models. Kept intentionally close to the schema in the project design doc
-(documents, detected_bills, ocr_results, transactions, audit_logs, companies) trimmed
-to what Phase 1 (Sales pipeline) and multi-company operations require.
+(documents, detected_bills, ocr_results, transactions, audit_logs) but trimmed
+to what Phase 1 (Sales pipeline) actually needs.
 """
 import datetime
 from sqlalchemy import (
@@ -11,10 +11,41 @@ from sqlalchemy.orm import relationship
 from .database import Base
 
 
+class Company(Base):
+    """
+    A client/business this teasy install manages books for. Introduced so
+    one desktop install (one bookkeeper, one license) can handle several
+    companies' books — each with its own GSTIN and its own Tally company —
+    the same way Tally itself lets you switch between companies on one
+    install, rather than needing a separate install/license per client.
+
+    Exactly one company is "active" at a time (see settings.py's
+    active_company_id) — every new upload, transaction, and Tally push is
+    scoped to whichever company is active when it happens. Switching the
+    active company is like opening a different company in Tally: it
+    changes what you see and where pushes go, it doesn't touch data.
+    """
+    __tablename__ = "companies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    gstin = Column(String, nullable=True)
+    state_code = Column(String, nullable=True)
+    default_gst_rate = Column(Float, default=18.0)
+    # The exact company name as it exists inside Tally — stamped into
+    # <SVCURRENTCOMPANY> on every voucher pushed while this company is
+    # active (see routers/tally.py). Can differ from `name` above (e.g. a
+    # shorter internal nickname vs. the legal name Tally has it under).
+    tally_company_name = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    archived = Column(Boolean, default=False)  # hidden from the switcher, but data is kept intact
+
+
 class Document(Base):
     __tablename__ = "documents"
 
     id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True, index=True)
     file_name = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
     document_type = Column(String, default="SALES")  # SALES | PURCHASE | GSTR2B
@@ -51,22 +82,10 @@ class OcrResult(Base):
     bill = relationship("DetectedBill", back_populates="ocr_result")
 
 
-class Company(Base):
-    __tablename__ = "companies"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    tally_company_name = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-
-    transactions = relationship("Transaction", back_populates="company")
-
-
 class Transaction(Base):
     __tablename__ = "transactions"
 
     id = Column(Integer, primary_key=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
     bill_id = Column(Integer, ForeignKey("detected_bills.id"))
     type = Column(String, default="SALES")
     party = Column(String, default="Cash")
@@ -116,6 +135,10 @@ class Transaction(Base):
     # those. See gst_states.py for how party_state is derived from it.
     party_gstin = Column(String, nullable=True)
     party_state = Column(String, nullable=True)
+    # Denormalized from the parent Document rather than requiring a join —
+    # reports.py and reconciliation.py both filter/group by company on
+    # every request, and Transaction is the table those actually query.
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True, index=True)
     narration = Column(Text, nullable=True)
     # Timestamp set the moment a transaction is approved (single or bulk).
     # Used as the default "approved order" when pushing to Tally — pushing
@@ -139,7 +162,6 @@ class Transaction(Base):
     matched_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
 
     bill = relationship("DetectedBill", back_populates="transaction")
-    company = relationship("Company", back_populates="transactions")
 
 
 class AuditLog(Base):

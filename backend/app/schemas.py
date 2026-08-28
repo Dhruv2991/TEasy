@@ -34,6 +34,7 @@ class TransactionOut(BaseModel):
     matched_transaction_id: Optional[int] = None
     party_gstin: Optional[str] = None
     party_state: Optional[str] = None
+    company_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -121,6 +122,7 @@ class BillOut(BaseModel):
 
 class DocumentOut(BaseModel):
     id: int
+    company_id: Optional[int] = None
     file_name: str
     document_type: str
     status: str
