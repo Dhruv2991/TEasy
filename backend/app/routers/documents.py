@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from .. import models, schemas
+from ..settings import get_active_company_id
 from ..ocr.preprocess import preprocess_pipeline
 from ..ocr.bill_detector import crop_bills
 from ..ocr.grid_detector import detect_four_bill_grid
@@ -136,6 +137,7 @@ def upload_document(
         shutil.copyfileobj(file.file, f)
 
     doc = models.Document(
+        company_id=get_active_company_id(),
         file_name=file.filename,
         file_path=saved_path,
         document_type=document_type,
@@ -454,13 +456,24 @@ def _process_document(document_id: int, db: Session):
 
 @router.get("", response_model=list[schemas.DocumentOut])
 def list_documents(db: Session = Depends(get_db)):
-    return db.query(models.Document).order_by(models.Document.uploaded_at.desc()).all()
+    active_id = get_active_company_id()
+    q = db.query(models.Document)
+    if active_id:
+        q = q.filter(models.Document.company_id == active_id)
+    return q.order_by(models.Document.uploaded_at.desc()).all()
 
 
 @router.get("/{document_id}", response_model=schemas.DocumentOut)
 def get_document(document_id: int, db: Session = Depends(get_db)):
     doc = db.query(models.Document).get(document_id)
     if doc is None:
+        raise HTTPException(404, "Document not found")
+    # Same isolation as the list endpoint — a document ID typed/guessed
+    # from outside the current company's own scoped list shouldn't be
+    # fetchable. 404 (not 403) so this doesn't confirm whether a given ID
+    # exists in another company at all.
+    active_id = get_active_company_id()
+    if active_id and doc.company_id and doc.company_id != active_id:
         raise HTTPException(404, "Document not found")
     return doc
 
