@@ -1,14 +1,12 @@
-"""Parses a general-purpose bill Excel (one row per invoice) for either
-Sales or Purchase — for the case where a user has their bills already
+"""Parses a general-purpose bill Excel (one row per invoice or multi-row per invoice)
+for either Sales or Purchase — for the case where a user has their bills already
 listed in a spreadsheet instead of (or alongside) photos. Column names vary
 by user/supplier, so this scores header rows against known aliases rather
-than assuming a fixed template, the same approach used for the
-supplier-invoice rate-matching feature.
+than assuming a fixed template.
 
-This does NOT read multi-line-item detail (that's a different, narrower
-feature) — it reads one row as one bill: party, date, invoice number,
-taxable value, GST rate/amounts, total. That matches how most small
-businesses actually keep a sales/purchase Excel register.
+Multi-line item rows or slab-wise breakdown columns sharing the same invoice number
+and party are automatically consolidated into a single invoice object containing
+a `rate_breakdown` list for Tally voucher generation.
 """
 import re
 from dataclasses import dataclass, field
@@ -35,7 +33,6 @@ class _XlrdSheetAdapter:
         self.max_column = xlrd_sheet.ncols
 
     def cell(self, row, col):
-        # incoming row/col are 1-based (openpyxl convention); xlrd is 0-based
         if row < 1 or col < 1 or row > self.max_row or col > self.max_column:
             return self._Cell(None)
         value = self._sheet.cell_value(row - 1, col - 1)
@@ -82,7 +79,6 @@ HEADER_VARIANTS = {
 
 STANDARD_GST_RATES = [0, 0.25, 1, 1.5, 3, 5, 6, 7.5, 12, 13.8, 18, 28]
 
-# Matches header cells like "Value@5%", "CGST@2.5%", "SGST@2.5%", "IGST@5%"
 _RATE_BUCKET_RE = re.compile(r"(value|cgst|sgst|igst)\s*@\s*([\d.]+)\s*%?", re.IGNORECASE)
 
 
@@ -94,21 +90,6 @@ def _closest_rate(pct):
 
 
 def _find_rate_buckets(sheet, header_row):
-    """Some registers (e.g. GST-input-breakup exports) list a slab-wise
-    breakdown alongside the row totals: 'Value@5%', 'CGST@2.5%', 'SGST@2.5%',
-    'IGST@5%', then 'Value@12%', 'CGST@6%', ... repeated per slab (and often
-    a standalone 'Value@0%' with no tax columns, since 0% tax is zero).
-    When one invoice spans more than one GST rate, the aggregate
-    taxable/CGST/SGST columns hold a blended figure that can't be snapped to
-    a single slab — but these per-slab columns tell us exactly how to split
-    that invoice into one clean-slab line per rate.
-
-    Columns are matched to a slab by RATE, not position — CGST/SGST columns
-    are quoted at half the invoice rate (e.g. 'CGST@2.5%' belongs to the 5%
-    slab, 'CGST@6%' to the 12% slab), IGST columns at the full rate. This
-    avoids misalignment when a slab (like 0%) has no tax columns of its own.
-    Returns a list of {rate, value_col, cgst_col, sgst_col, igst_col} dicts.
-    """
     buckets: dict[float, dict] = {}
     for col in range(1, sheet.max_column + 1):
         header_text = str(sheet.cell(header_row, col).value or "").strip()
@@ -154,22 +135,101 @@ class ParsedBillRow:
     igst: float
     total_value: float
     warnings: list = field(default_factory=list)
-    # True when this row is one slab of an invoice that spanned more than
-    # one GST rate and was split into multiple clean-slab rows. Downstream
-    # code can use this to, e.g., group split rows under one invoice number
-    # in the review UI instead of treating them as separate bills.
     split_from_multi_rate: bool = False
+    rate_breakdown: list = field(default_factory=list)
 
 
 def _excel_serial_to_date(serial: float):
-    # Excel/Lotus date epoch, matches both xlrd (1900 date system, the
-    # default for .xls) and how openpyxl-less spreadsheets store dates as
-    # plain numbers when the cell isn't formatted as a date.
     from datetime import datetime, timedelta
     try:
         return (datetime(1899, 12, 30) + timedelta(days=serial)).date()
     except (OverflowError, OSError, ValueError):
         return None
+
+
+def _consolidate_invoice_rows(raw_rows: list[ParsedBillRow]) -> list[ParsedBillRow]:
+    """Groups multiple Excel rows sharing the same party and invoice_number into
+    a single invoice object with an aggregated rate_breakdown list.
+    """
+    grouped_map: dict[tuple[str, str], ParsedBillRow] = {}
+    ungrouped: list[ParsedBillRow] = []
+
+    for r in raw_rows:
+        inv_no = (r.invoice_number or "").strip().lower()
+        party_name = (r.party or "").strip().lower()
+
+        line_breakdown = r.rate_breakdown if r.rate_breakdown else [{
+            "rate": r.gst_rate,
+            "taxable_value": r.taxable_value,
+            "cgst": r.cgst,
+            "sgst": r.sgst,
+            "igst": r.igst
+        }]
+
+        if not inv_no:
+            r.rate_breakdown = line_breakdown
+            ungrouped.append(r)
+            continue
+
+        key = (party_name, inv_no)
+        if key not in grouped_map:
+            grouped_map[key] = ParsedBillRow(
+                party=r.party,
+                date=r.date,
+                invoice_number=r.invoice_number,
+                taxable_value=r.taxable_value,
+                gst_rate=r.gst_rate,
+                cgst=r.cgst,
+                sgst=r.sgst,
+                igst=r.igst,
+                total_value=r.total_value,
+                warnings=list(r.warnings),
+                split_from_multi_rate=r.split_from_multi_rate,
+                rate_breakdown=list(line_breakdown)
+            )
+        else:
+            existing = grouped_map[key]
+            existing.taxable_value = round(existing.taxable_value + r.taxable_value, 2)
+            existing.cgst = round(existing.cgst + r.cgst, 2)
+            existing.sgst = round(existing.sgst + r.sgst, 2)
+            existing.igst = round(existing.igst + r.igst, 2)
+            existing.total_value = round(existing.total_value + r.total_value, 2)
+            existing.rate_breakdown.extend(line_breakdown)
+
+            for w in r.warnings:
+                if w not in existing.warnings:
+                    existing.warnings.append(w)
+
+            if r.split_from_multi_rate:
+                existing.split_from_multi_rate = True
+
+    consolidated = list(grouped_map.values()) + ungrouped
+
+    # Merge rate_breakdown entries with the same GST rate inside each invoice
+    for row in consolidated:
+        merged_breakdown: dict[float, dict] = {}
+        for b in row.rate_breakdown:
+            rt = float(b["rate"])
+            if rt not in merged_breakdown:
+                merged_breakdown[rt] = {
+                    "rate": rt,
+                    "taxable_value": float(b["taxable_value"]),
+                    "cgst": float(b["cgst"]),
+                    "sgst": float(b["sgst"]),
+                    "igst": float(b["igst"])
+                }
+            else:
+                m = merged_breakdown[rt]
+                m["taxable_value"] = round(m["taxable_value"] + float(b["taxable_value"]), 2)
+                m["cgst"] = round(m["cgst"] + float(b["cgst"]), 2)
+                m["sgst"] = round(m["sgst"] + float(b["sgst"]), 2)
+                m["igst"] = round(m["igst"] + float(b["igst"]), 2)
+
+        row.rate_breakdown = list(merged_breakdown.values())
+        if len(row.rate_breakdown) == 1:
+            row.gst_rate = row.rate_breakdown[0]["rate"]
+
+    return consolidated
 
 
 def parse_bill_excel(file_path: str) -> list[ParsedBillRow]:
@@ -191,19 +251,17 @@ def parse_bill_excel(file_path: str) -> list[ParsedBillRow]:
     def bucket_amount(row, col):
         return _number(sheet.cell(row, col).value) if col else 0.0
 
-    rows = []
+    raw_rows = []
     for row in range(header_row + 1, sheet.max_row + 1):
         taxable = _number(get(row, "taxable_value"))
         total = _number(get(row, "total_value"))
         if taxable is None and total is None:
-            continue  # blank spacer row
+            continue
 
         date_val = get(row, "date")
         if hasattr(date_val, "date"):
             date_str = str(date_val.date())
         elif isinstance(date_val, (int, float)) and date_val > 1000:
-            # Bare numeric cell (common in legacy .xls exports) — treat as
-            # an Excel date serial rather than a literal number.
             parsed = _excel_serial_to_date(date_val)
             date_str = str(parsed) if parsed else str(date_val).strip()
         else:
@@ -215,9 +273,6 @@ def parse_bill_excel(file_path: str) -> list[ParsedBillRow]:
         if not date_str:
             base_warnings.append("No date found on this row — fill in manually before approving.")
 
-        # Slab-wise split: if this invoice has a nonzero value in more than
-        # one rate bucket, emit one clean-slab row per active bucket instead
-        # of one row with a blended rate.
         active_buckets = []
         for b in rate_buckets:
             bval = bucket_amount(row, b["value_col"]) or 0.0
@@ -230,7 +285,7 @@ def parse_bill_excel(file_path: str) -> list[ParsedBillRow]:
         if len(active_buckets) > 1:
             for rate, bval, bcgst, bsgst, bigst in active_buckets:
                 line_total = round(bval + bcgst + bsgst + bigst, 2)
-                rows.append(ParsedBillRow(
+                raw_rows.append(ParsedBillRow(
                     party=party, date=date_str, invoice_number=invoice_number,
                     taxable_value=round(bval, 2), gst_rate=rate,
                     cgst=round(bcgst, 2), sgst=round(bsgst, 2), igst=round(bigst, 2),
@@ -242,9 +297,6 @@ def parse_bill_excel(file_path: str) -> list[ParsedBillRow]:
                 ))
             continue
 
-        # Single slab (or no bucket columns at all) — same logic as before,
-        # optionally using the one active bucket for a cleaner rate/amounts
-        # than the blended aggregate columns would give.
         if len(active_buckets) == 1:
             rate, taxable, cgst, sgst, igst = active_buckets[0]
         else:
@@ -268,13 +320,14 @@ def parse_bill_excel(file_path: str) -> list[ParsedBillRow]:
         if total is None:
             total = round(taxable + cgst + sgst + igst, 2)
 
-        rows.append(ParsedBillRow(
+        raw_rows.append(ParsedBillRow(
             party=party, date=date_str, invoice_number=invoice_number,
             taxable_value=round(taxable, 2), gst_rate=rate,
             cgst=round(cgst, 2), sgst=round(sgst, 2), igst=round(igst, 2),
             total_value=round(total, 2), warnings=base_warnings,
         ))
 
-    if not rows:
+    if not raw_rows:
         raise ValueError("Found a header row but no bill rows with a usable amount under it.")
-    return rows
+
+    return _consolidate_invoice_rows(raw_rows)

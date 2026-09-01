@@ -36,6 +36,7 @@ class ExtractedTransaction:
     total_value: float = 0.0
     confidence: float = 0.0
     warnings: list = field(default_factory=list)
+    rate_breakdown: list = field(default_factory=list)
 
 
 def _parse_amounts(text: str) -> list[float]:
@@ -91,8 +92,6 @@ def extract_sales_transaction(raw_text: str, ocr_confidence: float) -> Extracted
     invoice_number = _parse_invoice_number(raw_text)
 
     if amounts:
-        # Heuristic: largest amount on a handwritten sales bill is almost
-        # always the bill total. This is the #1 thing a human should verify.
         total = max(amounts)
         tx.total_value = round_rupee(total)
 
@@ -103,8 +102,22 @@ def extract_sales_transaction(raw_text: str, ocr_confidence: float) -> Extracted
             tx.gst_rate = gst_rate
             tx.cgst = round(gst_amount / 2, 2)
             tx.sgst = round(gst_amount / 2, 2)
+            tx.rate_breakdown = [{
+                "rate": gst_rate,
+                "taxable_value": tx.taxable_value,
+                "cgst": tx.cgst,
+                "sgst": tx.sgst,
+                "igst": 0.0
+            }]
         else:
             tx.taxable_value = total
+            tx.rate_breakdown = [{
+                "rate": 0.0,
+                "taxable_value": total,
+                "cgst": 0.0,
+                "sgst": 0.0,
+                "igst": 0.0
+            }]
             warnings.append("No GST rate detected — assumed non-GST or needs manual entry")
     else:
         warnings.append("No amount detected — requires manual entry")
@@ -115,7 +128,6 @@ def extract_sales_transaction(raw_text: str, ocr_confidence: float) -> Extracted
 
     tx.invoice_number = invoice_number
 
-    # confidence: blend OCR confidence with how much we successfully parsed
     parse_score = sum([
         1 if amounts else 0,
         1 if date else 0,

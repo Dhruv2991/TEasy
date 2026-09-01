@@ -15,14 +15,7 @@ class MissingVoucherDateError(Exception):
 
 
 def _tally_date(iso_date) -> str:
-    """Formats date as YYYYMMDD for Tally XML.
-
-    Deliberately does NOT fall back to today's date when the source date is
-    missing or unparseable — silently mis-dating a real invoice is worse
-    than failing loudly, since the user would never notice a wrong date was
-    pushed. Callers must catch MissingVoucherDateError and surface it as a
-    fixable issue instead of sending the voucher to Tally.
-    """
+    """Formats date as YYYYMMDD for Tally XML."""
     if iso_date:
         try:
             if isinstance(iso_date, datetime):
@@ -68,10 +61,6 @@ def _ledger_exists(ledgers: list[dict], name: str) -> bool:
 
 def _resolve_ledger_names(vch_type: str, rate: float, config: dict, ledgers: list[dict]) -> dict:
     def _clean(r: float):
-        # Preserve real fractional GST rates like 2.5% (half of 5%) or 6.9%
-        # instead of rounding them to a whole number — CGST@2% is simply
-        # wrong for a 5% invoice, it must read CGST@2.5%. Only strip the
-        # decimal when the rate genuinely is a whole number (e.g. 6.0 -> 6).
         return int(r) if r == int(r) else round(r, 2)
 
     rate_int = _clean(rate) if rate else 0
@@ -160,7 +149,12 @@ def _create_ledger_master_xml(name: str, under: str, gst_duty_type: str | None =
 def _ledger_entry(name: str, amount: float, is_deemed_positive: bool, rate_pct: float | None = None) -> str:
     amt_val = -abs(amount) if is_deemed_positive else abs(amount)
     dp_str = "Yes" if is_deemed_positive else "No"
-    rate_tag = f"\n          <RATE>{int(round(rate_pct))} %</RATE>" if rate_pct and rate_pct > 0 else ""
+    
+    if rate_pct and rate_pct > 0:
+        clean_rate = int(rate_pct) if rate_pct == int(rate_pct) else round(rate_pct, 2)
+        rate_tag = f"\n          <RATE>{clean_rate} %</RATE>"
+    else:
+        rate_tag = ""
 
     return f"""
         <ALLLEDGERENTRIES.LIST>
@@ -182,17 +176,6 @@ def build_voucher_xml(vch_type_str: str, tx: dict, config: dict, ledgers: list[d
     sgst = float(tx.get("sgst") or 0.0)
     igst = float(tx.get("igst") or 0.0)
 
-    # This is the ONLY place total_value gets rounded to a whole rupee.
-    # Every earlier stage (AI extraction, GSTR-2B import, manual edit)
-    # stores the exact value as read/typed — taxable_value and the GST
-    # components are never rounded early either. Rounding total_value
-    # early while leaving the tax components exact is exactly what used
-    # to create a spurious mismatch between "taxable + tax" and "total"
-    # that had nothing to do with the actual bill. Rounding happens here,
-    # once, right before the voucher is actually written, and any real
-    # residual difference goes to the ROUNDOFF ledger below — same as
-    # Tally's own convention of rounding the invoice total, not its
-    # components.
     total = round_rupee(tx.get("total_value")) or 0.0
 
     rate = float(tx.get("gst_rate") or 0.0)
@@ -202,11 +185,6 @@ def build_voucher_xml(vch_type_str: str, tx: dict, config: dict, ledgers: list[d
     calculated = taxable + cgst + sgst + igst
     diff = round(total - calculated, 2)
 
-    # A per-rate breakdown (from a reconciled supplier invoice, see
-    # gstr2b/supplier_match.py) means this is a genuinely mixed-rate
-    # invoice: several line items at several GST rates on one bill. Tally
-    # represents that as ONE voucher with multiple main/CGST/SGST/IGST line
-    # sets -- never as several separate vouchers for a single physical bill.
     raw_breakdown = tx.get("rate_breakdown")
     breakdown = raw_breakdown if raw_breakdown else [
         {"rate": rate, "taxable_value": taxable, "cgst": cgst, "sgst": sgst, "igst": igst}
@@ -261,11 +239,11 @@ def build_voucher_xml(vch_type_str: str, tx: dict, config: dict, ledgers: list[d
         masters.append(_create_ledger_master_xml(round_off_ledger, "Indirect Expenses"))
     names = {"round_off": round_off_ledger}
 
-    # CORRECTED ROUND-OFF BALANCING
+    # Round-off Balancing
     if abs(diff) >= 0.01:
-        if not party_dp:  # Purchase / Debit Note
+        if not party_dp:  # Purchase
             round_off_dp = (diff > 0)
-        else:             # Sales / Credit Note
+        else:             # Sales / Debit Note
             round_off_dp = (diff < 0)
         entries.append(_ledger_entry(names["round_off"], abs(diff), is_deemed_positive=round_off_dp))
 
@@ -310,11 +288,7 @@ def wrap_envelope(tally_messages_xml: str, company_name: str) -> str:
 
 
 def build_bank_voucher_xml(tx: dict, config: dict) -> str:
-    """Journal voucher for a bank-statement row: bank ledger on one side,
-    the matched counter-party ledger on the other. Mirrors the standalone
-    logic bank.py used to build inline before pushing straight to Tally —
-    now driven off the reviewed/approved Transaction instead of the raw
-    parsed PDF row."""
+    """Journal voucher for a bank-statement row."""
     date = _tally_date(tx.get("date"))
     party = tx.get("party") or "SALDEBTOR"
     bank_ledger = tx.get("bank_ledger") or config.get("bank_ledger") or "Bank Account"
@@ -325,9 +299,6 @@ def build_bank_voucher_xml(tx: dict, config: dict) -> str:
     is_credit = credit > 0
     amount = credit if is_credit else debit
 
-    # A credit in the statement (money coming IN) means the bank ledger is
-    # debited and the counter-party is credited, and vice versa for a
-    # debit/withdrawal — standard journal-entry convention.
     if is_credit:
         debit_ledger, credit_ledger = bank_ledger, party
     else:
@@ -362,6 +333,7 @@ def build_voucher_envelope(tx: dict, config: dict) -> str:
         message = build_bank_voucher_xml(tx, config)
         return wrap_envelope(message, config["company_name"])
 
+    # All Note types (CREDIT, DEBIT, NOTE, CDN) route straight to Debit Note
     if any(k in raw_type for k in ["CREDIT", "DEBIT", "NOTE", "CDN"]):
         vch_type = "Debit Note"
     elif "SALE" in raw_type:

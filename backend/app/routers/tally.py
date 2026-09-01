@@ -126,43 +126,33 @@ def push_approved_transactions(
         push_type = payload.type
         explicit_order = payload.order
 
+    # 1. Broaden status filter (handles NULL tally_status from fresh Excel imports)
     base_query = db.query(models.Transaction).filter(
-        models.Transaction.status == "APPROVED",
-        models.Transaction.tally_status != "SENT",
+        models.Transaction.status.ilike("APPROVED"),
+        (models.Transaction.tally_status != "SENT") | (models.Transaction.tally_status.is_(None))
     )
-    # Only push the ACTIVE company's approved transactions. Without this, a
-    # single /push call would push every company's pending approvals in one
-    # go, and — combined with SVCURRENTCOMPANY now correctly pointing at
-    # the active company (see _effective_tally_config) — Company A's
-    # sales would get created inside Company B's Tally data if Company B
-    # happened to be the one currently open. Falls back to unscoped (old
-    # single-company behavior) if no company is set up yet.
+
+    # 2. Match active company OR unassigned (NULL) company transactions from Excel
     if active_company:
-        base_query = base_query.filter(models.Transaction.company_id == active_company.id)
+        base_query = base_query.filter(
+            (models.Transaction.company_id == active_company.id) | 
+            (models.Transaction.company_id.is_(None))
+        )
 
     if explicit_order:
-        # The caller (typically a Review & Approve page) already knows the
-        # exact order it wants — usually "whatever order the table is
-        # currently sorted by" — so push in exactly that sequence rather
-        # than re-deriving one. Ids that aren't actually APPROVED/unsent
-        # (already pushed, rejected since the page loaded, etc.) are just
-        # skipped rather than erroring the whole batch.
-        by_id = {tx.id: tx for tx in base_query.filter(models.Transaction.id.in_(explicit_order)).all()}
+        # Preserve exact UI visual order passed in payload.order
+        fetched_txs = base_query.filter(models.Transaction.id.in_(explicit_order)).all()
+        by_id = {tx.id: tx for tx in fetched_txs}
         pending = [by_id[i] for i in explicit_order if i in by_id]
     else:
         if push_type:
-            base_query = base_query.filter(models.Transaction.type == push_type.upper())
-        # Default order: grouped by voucher type so Tally receives clean,
-        # same-type batches back to back instead of an interleaved mix —
-        # then, within each type, in the order the transactions were
-        # actually approved (falling back to insertion order for any older
-        # rows approved before approved_at existed). "Approved order" is a
-        # more meaningful default than raw id/date order when no explicit
-        # sort was requested.
+            # Case-insensitive type matching (e.g. 'sales', 'Sales', 'SALES')
+            base_query = base_query.filter(models.Transaction.type.ilike(push_type))
+        
         type_priority = {"SALES": 0, "PURCHASE": 1, "DEBIT_NOTE": 2, "CREDIT_NOTE": 3, "BANK": 4}
         pending = base_query.all()
         pending.sort(key=lambda tx: (
-            type_priority.get(tx.type, 99),
+            type_priority.get(str(tx.type).upper(), 99),
             tx.approved_at or datetime.min,
             tx.id,
         ))

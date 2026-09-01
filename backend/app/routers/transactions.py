@@ -231,14 +231,19 @@ def approve_transaction(transaction_id: int, db: Session = Depends(get_db)):
         )
 
     tx.status = "APPROVED"
+    tx.tally_status = "NOT_SENT"  # Required so Tally queries pick it up
     tx.approved_at = datetime.datetime.utcnow()
+    
+    if not tx.company_id:
+        tx.company_id = get_active_company_id()
+
     db.add(
         models.AuditLog(
             transaction_id=tx.id, message="Transaction approved by user"
         )
     )
     db.commit()
-    if tx.type in ("SALES", "PURCHASE"):
+    if (tx.type or "").upper() in ("SALES", "PURCHASE"):
         _maybe_reconcile(db)
     db.refresh(tx)
     return tx
@@ -281,6 +286,7 @@ def bulk_approve_transactions(
 
     approved_ids = []
     errors = []
+    active_company_id = get_active_company_id()
 
     for tx in txs:
         missing = _validate_sales_tx(tx)
@@ -291,7 +297,12 @@ def bulk_approve_transactions(
             continue
 
         tx.status = "APPROVED"
+        tx.tally_status = "NOT_SENT"  # Required so Tally queries pick it up
         tx.approved_at = datetime.datetime.utcnow()
+        
+        if not tx.company_id:
+            tx.company_id = active_company_id
+
         db.add(
             models.AuditLog(
                 transaction_id=tx.id, message="Transaction approved via bulk action"
@@ -300,7 +311,7 @@ def bulk_approve_transactions(
         approved_ids.append(tx.id)
 
     db.commit()
-    if any(tx.type in ("SALES", "PURCHASE") for tx in txs if tx.id in approved_ids):
+    if any((tx.type or "").upper() in ("SALES", "PURCHASE") for tx in txs if tx.id in approved_ids):
         _maybe_reconcile(db)
     return {
         "status": "success",

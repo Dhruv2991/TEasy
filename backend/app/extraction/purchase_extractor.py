@@ -28,6 +28,7 @@ class ExtractedPurchase:
     total_value: float = 0.0
     confidence: float = 0.0
     warnings: list = field(default_factory=list)
+    rate_breakdown: list = field(default_factory=list)
 
 
 def _parse_amounts(text: str) -> list[float]:
@@ -73,23 +74,12 @@ def _parse_invoice_number(text: str) -> str | None:
 
 
 def _parse_supplier_name(text: str) -> str | None:
-    # Very rough heuristic: the supplier's name is usually one of the first
-    # all-caps-ish lines of OCR text (letterhead), before "GSTIN"/"Invoice"
-    # keywords appear. This is far less reliable than the Groq path — flag
-    # it clearly so the user knows to double check.
-    #
-    # Modern e-invoices often print IRN/Ack No/Ack Date/e-Way Bill metadata
-    # ABOVE the letterhead — these are long hash-like strings or reference
-    # numbers, not the supplier name, so skip lines that look like that too.
     lines = [l.strip() for l in text.split("\n") if l.strip()]
     skip_pattern = re.compile(
         r"gstin|invoice|bill\s*no|^tax\b|irn|ack\s*no|ack\s*date|e-?way\s*bill|"
         r"consignee|ship\s*to|bill\s*to|buyer|reference\s*no|dispatch",
         re.IGNORECASE,
     )
-    # Long alphanumeric hash-like strings (e.g. IRN values, which often
-    # include hyphens) — reject lines that are mostly hex/digits even if
-    # they slip past the keyword filter.
     hash_like = re.compile(r"^[a-f0-9\-]{20,}$", re.IGNORECASE)
 
     for line in lines[:8]:
@@ -122,8 +112,22 @@ def extract_purchase_transaction(raw_text: str, ocr_confidence: float) -> Extrac
             tx.gst_rate = gst_rate
             tx.cgst = round(gst_amount / 2, 2)
             tx.sgst = round(gst_amount / 2, 2)
+            tx.rate_breakdown = [{
+                "rate": gst_rate,
+                "taxable_value": tx.taxable_value,
+                "cgst": tx.cgst,
+                "sgst": tx.sgst,
+                "igst": 0.0
+            }]
         else:
             tx.taxable_value = total
+            tx.rate_breakdown = [{
+                "rate": 0.0,
+                "taxable_value": total,
+                "cgst": 0.0,
+                "sgst": 0.0,
+                "igst": 0.0
+            }]
             warnings.append("No GST rate detected — assumed non-GST or needs manual entry")
     else:
         warnings.append("No amount detected — requires manual entry")
@@ -143,8 +147,7 @@ def extract_purchase_transaction(raw_text: str, ocr_confidence: float) -> Extrac
         1 if gst_rate else 0,
         1 if supplier else 0,
     ]) / 4.0
-    # Deliberately capped lower than sales — this path is a rougher net.
-    tx.confidence = round(min(0.6, (0.5 * ocr_confidence) + (0.3 * parse_score)), 2)
 
+    tx.confidence = round(min(0.6, (0.5 * ocr_confidence) + (0.3 * parse_score)), 2)
     tx.warnings = warnings
     return tx
