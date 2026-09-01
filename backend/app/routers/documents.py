@@ -205,12 +205,33 @@ def _process_excel_document(document_id: int, db: Session):
         # like any other incomplete transaction.
         confidence = 0.5 if row.warnings else 1.0
 
+        import json as _json
+
+        # The item-wise Tally-template parser can carry its own Vch. Type
+        # per row (Sales/Purchase/Credit Note/...) which is more reliable
+        # than the blanket document_type the user picked at upload time
+        # (a single spreadsheet legitimately mixes Sales and Credit Note
+        # rows in Tally's own export format).
+        row_type = doc.document_type
+        if row.vch_type:
+            vt = row.vch_type.strip().upper()
+            if "CREDIT" in vt:
+                row_type = "CREDIT_NOTE"
+            elif "DEBIT" in vt:
+                row_type = "DEBIT_NOTE"
+            elif "SALE" in vt:
+                row_type = "SALES"
+            elif "PURCHASE" in vt:
+                row_type = "PURCHASE"
+
         tx = models.Transaction(
-            bill_id=bill.id, type=doc.document_type, party=party, date=row.date,
+            bill_id=bill.id, type=row_type, party=party, date=row.date,
             invoice_number=row.invoice_number, taxable_value=row.taxable_value,
             gst_rate=row.gst_rate, cgst=row.cgst, sgst=row.sgst, igst=row.igst,
             total_value=row.total_value, confidence=confidence,
             status="NEEDS_REVIEW",
+            rate_breakdown=_json.dumps(row.rate_breakdown) if len(row.rate_breakdown) > 1 else None,
+            items=_json.dumps(row.items) if row.items else None,
         )
         db.add(tx)
         db.commit()

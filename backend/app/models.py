@@ -122,6 +122,15 @@ class Transaction(Base):
     # single line at the (possibly uncertain) aggregate rate.
     rate_breakdown = Column(Text, nullable=True)
     rate_breakdown_source = Column(String, nullable=True)  # e.g. filename of the supplier invoice that supplied it
+    # JSON string: [{"name": "Item Name", "hsn": "...", "qty": ..., "unit": "...",
+    # "price": ..., "amount": ..., "rate": <gst rate for this line>}, ...]
+    # Populated when the source (a Tally-format item-wise Excel, or a manual
+    # item-wise voucher entry) actually lists stock items rather than a single
+    # lump-sum bill amount. When present, the voucher builder emits an
+    # inventory voucher (ALLINVENTORYENTRIES.LIST, one per stock item) instead
+    # of a plain ledger-amount voucher, and auto-creates any missing stock
+    # item masters in Tally the same way it auto-creates missing ledgers.
+    items = Column(Text, nullable=True)
     # Bank-statement-specific fields (type == "BANK"). GST/taxable fields
     # above are left at 0 for these — a bank entry is a plain ledger-to-ledger
     # movement, never a taxed sale/purchase line. Exactly one of debit/credit

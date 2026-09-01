@@ -82,6 +82,7 @@ def run_lightweight_migrations():
         "manually_reviewed": "BOOLEAN DEFAULT 0",
         "rate_breakdown": "TEXT",
         "rate_breakdown_source": "VARCHAR",
+        "items": "TEXT",
         "debit": "FLOAT DEFAULT 0.0",
         "credit": "FLOAT DEFAULT 0.0",
         "narration": "TEXT",

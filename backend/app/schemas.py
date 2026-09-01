@@ -23,6 +23,7 @@ class TransactionOut(BaseModel):
     manually_reviewed: bool = False
     rate_breakdown: Optional[str] = None  # JSON string, see models.py
     rate_breakdown_source: Optional[str] = None
+    items: Optional[str] = None  # JSON string, see models.py
     debit: float = 0.0
     credit: float = 0.0
     balance: Optional[float] = None

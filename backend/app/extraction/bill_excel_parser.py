@@ -50,7 +50,7 @@ def _load_first_sheet(file_path: str):
 def _normalize(text) -> str:
     if text is None:
         return ""
-    return re.sub(r"[₹()%\s\-_/.]", "", str(text)).lower()
+    return re.sub(r"[₹()%\s\-_/.*?]", "", str(text)).lower()
 
 
 def _number(value):
@@ -137,6 +137,10 @@ class ParsedBillRow:
     warnings: list = field(default_factory=list)
     split_from_multi_rate: bool = False
     rate_breakdown: list = field(default_factory=list)
+    # [{"name": ..., "hsn": ..., "qty": ..., "unit": ..., "price": ..., "amount": ..., "rate": ...}, ...]
+    # Populated only by the item-wise Tally-template parser below.
+    items: list = field(default_factory=list)
+    vch_type: str | None = None
 
 
 def _excel_serial_to_date(serial: float):
@@ -145,6 +149,55 @@ def _excel_serial_to_date(serial: float):
         return (datetime(1899, 12, 30) + timedelta(days=serial)).date()
     except (OverflowError, OSError, ValueError):
         return None
+
+
+_DMY_RE = re.compile(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$")
+_YMD_RE = re.compile(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$")
+
+
+def _parse_date_cell(date_val) -> str | None:
+    """Normalizes a date cell (Excel datetime, serial number, or text) to
+    an ISO 'YYYY-MM-DD' string. Text dates are assumed day-first
+    (DD-MM-YYYY / DD/MM/YYYY) since that's the standard Indian/Tally
+    convention this template is exported in — datetime.fromisoformat()
+    downstream would otherwise silently misparse (or outright reject,
+    raising MissingVoucherDateError at push time) a value like
+    '01-04-2026' because it isn't already ISO-ordered.
+    """
+    if date_val is None:
+        return None
+    if hasattr(date_val, "date") and not isinstance(date_val, str):
+        try:
+            return str(date_val.date())
+        except (TypeError, ValueError):
+            pass
+    if isinstance(date_val, (int, float)) and date_val > 1000:
+        parsed = _excel_serial_to_date(date_val)
+        return str(parsed) if parsed else None
+
+    text = str(date_val).strip()
+    if not text:
+        return None
+
+    m = _YMD_RE.match(text)
+    if m:
+        y, mo, d = m.groups()
+        try:
+            from datetime import date
+            return str(date(int(y), int(mo), int(d)))
+        except ValueError:
+            return None
+
+    m = _DMY_RE.match(text)
+    if m:
+        d, mo, y = m.groups()
+        try:
+            from datetime import date
+            return str(date(int(y), int(mo), int(d)))
+        except ValueError:
+            return None
+
+    return text
 
 
 def _consolidate_invoice_rows(raw_rows: list[ParsedBillRow]) -> list[ParsedBillRow]:
@@ -185,7 +238,9 @@ def _consolidate_invoice_rows(raw_rows: list[ParsedBillRow]) -> list[ParsedBillR
                 total_value=r.total_value,
                 warnings=list(r.warnings),
                 split_from_multi_rate=r.split_from_multi_rate,
-                rate_breakdown=list(line_breakdown)
+                rate_breakdown=list(line_breakdown),
+                items=list(r.items),
+                vch_type=r.vch_type,
             )
         else:
             existing = grouped_map[key]
@@ -195,6 +250,12 @@ def _consolidate_invoice_rows(raw_rows: list[ParsedBillRow]) -> list[ParsedBillR
             existing.igst = round(existing.igst + r.igst, 2)
             existing.total_value = round(existing.total_value + r.total_value, 2)
             existing.rate_breakdown.extend(line_breakdown)
+            existing.items.extend(r.items)
+            # Prefer the date of the row that actually has one — a
+            # continuation item row in the template can come in blank
+            # (Tally only requires the date on the invoice, not every line).
+            if not existing.date and r.date:
+                existing.date = r.date
 
             for w in r.warnings:
                 if w not in existing.warnings:
@@ -204,6 +265,14 @@ def _consolidate_invoice_rows(raw_rows: list[ParsedBillRow]) -> list[ParsedBillR
                 existing.split_from_multi_rate = True
 
     consolidated = list(grouped_map.values()) + ungrouped
+
+    # A "no date" warning raised by one line of a multi-line invoice is
+    # stale once another line of the *same* invoice supplied the date used
+    # above — don't leave it in the merged warnings list to confuse the
+    # approver.
+    for row in consolidated:
+        if row.date:
+            row.warnings = [w for w in row.warnings if "No date found" not in w]
 
     # Merge rate_breakdown entries with the same GST rate inside each invoice
     for row in consolidated:
@@ -232,8 +301,154 @@ def _consolidate_invoice_rows(raw_rows: list[ParsedBillRow]) -> list[ParsedBillR
     return consolidated
 
 
+# --- Item-wise ("Tally voucher import") template ------------------------
+# Tally Prime's own "Sales Voucher" / "Purchase Voucher" Excel export/import
+# template: one row per stock-item line (several rows can share the same
+# Vch. No. when an invoice has more than one item), with a fixed set of
+# per-slab GST columns ("IGST 5%", "CGST 2.5%", "SGST 2.5%", ...) rather
+# than the freeform "gst_rate" + "cgst_amount" columns the generic parser
+# above expects. Detected up front so a user who exports straight from
+# Tally (or fills this exact template) doesn't hit the generic parser's
+# "could not find a recognizable bill table" error.
+
+_ITEM_TEMPLATE_HEADERS = {
+    "date": ["vchdate"],
+    "vch_type": ["vchtype"],
+    "invoice_number": ["vchno"],
+    "party": ["partyledger"],
+    "sales_ledger": ["salesledger"],
+    "stock_item": ["stockitem"],
+    "quantity": ["quantity"],
+    "rate": ["rate"],
+    "unit": ["unit"],
+    "amount": ["amount"],
+    "narration": ["narration"],
+    "gst_rate": ["gstrate"],
+    "hsn": ["hsn"],
+    "round_off": ["roundoff"],
+}
+
+# (gst_rate, igst_header_key, cgst_header_key, sgst_header_key) — header
+# keys are post-_normalize (spaces/%/./₹ stripped), matching how "IGST 5%"
+# and "CGST 2.5%" come out of _normalize().
+_ITEM_TEMPLATE_RATE_SLABS = [
+    (5, "igst5", "cgst25", "sgst25"),
+    (12, "igst12", "cgst6", "sgst6"),
+    (18, "igst18", "cgst9", "sgst9"),
+    (28, "igst28", "cgst14", "sgst14"),
+]
+
+
+def _find_item_template_header_row(sheet) -> tuple[int, dict] | None:
+    for row in range(1, min(sheet.max_row, 5) + 1):
+        found = {}
+        for col in range(1, sheet.max_column + 1):
+            value = _normalize(sheet.cell(row, col).value)
+            if not value:
+                continue
+            for field_name, variants in _ITEM_TEMPLATE_HEADERS.items():
+                if field_name not in found and value in variants:
+                    found[field_name] = col
+        # This template is only usable once we can identify the invoice
+        # number, party, and a per-line amount column.
+        if "invoice_number" in found and "party" in found and "amount" in found:
+            return row, found
+    return None
+
+
+def _looks_like_item_template(sheet) -> bool:
+    return _find_item_template_header_row(sheet) is not None
+
+
+def _parse_item_template_excel(sheet) -> list[ParsedBillRow]:
+    header_row, cols = _find_item_template_header_row(sheet)
+
+    rate_cols = {}
+    for col in range(1, sheet.max_column + 1):
+        rate_cols[_normalize(sheet.cell(header_row, col).value)] = col
+
+    def get(row, name):
+        col = cols.get(name)
+        return sheet.cell(row, col).value if col else None
+
+    raw_rows: list[ParsedBillRow] = []
+    for row in range(header_row + 1, sheet.max_row + 1):
+        amount = _number(get(row, "amount"))
+        invoice_number = str(get(row, "invoice_number") or "").strip() or None
+        party = str(get(row, "party") or "").strip() or None
+        stock_item = str(get(row, "stock_item") or "").strip() or None
+
+        # A blank continuation row (e.g. a spacer, or a totals row with no
+        # invoice number / amount) isn't a bill line — skip it rather than
+        # creating a bogus zero-value transaction.
+        if amount is None and not invoice_number:
+            continue
+        if amount is None:
+            amount = 0.0
+
+        date_str = _parse_date_cell(get(row, "date"))
+        base_warnings = []
+        if not date_str:
+            base_warnings.append("No date found on this row — fill in manually before approving.")
+        if not invoice_number:
+            base_warnings.append("No voucher number found on this row.")
+
+        cgst = sgst = igst = 0.0
+        rate = 0.0
+        for slab_rate, igst_key, cgst_key, sgst_key in _ITEM_TEMPLATE_RATE_SLABS:
+            v_igst = _number(sheet.cell(row, rate_cols[igst_key]).value) if igst_key in rate_cols else None
+            v_cgst = _number(sheet.cell(row, rate_cols[cgst_key]).value) if cgst_key in rate_cols else None
+            v_sgst = _number(sheet.cell(row, rate_cols[sgst_key]).value) if sgst_key in rate_cols else None
+            if (v_igst and abs(v_igst) > 0.004) or (v_cgst and abs(v_cgst) > 0.004) or (v_sgst and abs(v_sgst) > 0.004):
+                igst = round((v_igst or 0.0), 2)
+                cgst = round((v_cgst or 0.0), 2)
+                sgst = round((v_sgst or 0.0), 2)
+                rate = slab_rate
+                break
+
+        if rate == 0.0:
+            explicit_rate = _number(get(row, "gst_rate"))
+            if explicit_rate:
+                rate = explicit_rate * 100 if 0 < explicit_rate <= 1 else explicit_rate
+
+        round_off = _number(get(row, "round_off")) or 0.0
+        line_total = round(amount + cgst + sgst + igst + round_off, 2)
+
+        qty = _number(get(row, "quantity"))
+        price = _number(get(row, "rate"))
+        vch_type_val = str(get(row, "vch_type") or "").strip() or None
+
+        item_line = []
+        if stock_item:
+            item_line = [{
+                "name": stock_item,
+                "hsn": str(get(row, "hsn") or "").strip() or None,
+                "qty": qty,
+                "unit": str(get(row, "unit") or "").strip() or None,
+                "price": price,
+                "amount": round(amount, 2),
+                "rate": rate,
+            }]
+
+        raw_rows.append(ParsedBillRow(
+            party=party, date=date_str, invoice_number=invoice_number,
+            taxable_value=round(amount, 2), gst_rate=rate,
+            cgst=cgst, sgst=sgst, igst=igst,
+            total_value=line_total, warnings=base_warnings,
+            items=item_line, vch_type=vch_type_val,
+        ))
+
+    if not raw_rows:
+        raise ValueError("Found the Tally voucher template header but no item/bill rows under it.")
+
+    return _consolidate_invoice_rows(raw_rows)
+
+
 def parse_bill_excel(file_path: str) -> list[ParsedBillRow]:
     sheet = _load_first_sheet(file_path)
+
+    if _looks_like_item_template(sheet):
+        return _parse_item_template_excel(sheet)
 
     header = _find_header_row(sheet)
     if not header:
@@ -258,14 +473,7 @@ def parse_bill_excel(file_path: str) -> list[ParsedBillRow]:
         if taxable is None and total is None:
             continue
 
-        date_val = get(row, "date")
-        if hasattr(date_val, "date"):
-            date_str = str(date_val.date())
-        elif isinstance(date_val, (int, float)) and date_val > 1000:
-            parsed = _excel_serial_to_date(date_val)
-            date_str = str(parsed) if parsed else str(date_val).strip()
-        else:
-            date_str = str(date_val).strip() if date_val else None
+        date_str = _parse_date_cell(get(row, "date"))
 
         party = str(get(row, "party") or "").strip() or None
         invoice_number = str(get(row, "invoice_number") or "").strip() or None

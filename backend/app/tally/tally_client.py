@@ -154,3 +154,79 @@ def fetch_ledgers(force_refresh: bool = False) -> list[dict]:
     _LEDGER_CACHE["at"] = now
     _LEDGER_CACHE["ledgers"] = ledgers
     return ledgers
+
+
+_STOCK_ITEM_CACHE: dict = {"company": None, "at": 0.0, "items": []}
+_STOCK_ITEM_CACHE_TTL_SECONDS = 60
+
+
+_STOCK_ITEM_LIST_REQUEST = """<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Export</TALLYREQUEST>
+    <TYPE>Collection</TYPE>
+    <ID>TEasyStockItemList</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>{company}</SVCURRENTCOMPANY>
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="TEasyStockItemList" ISINITIALIZE="Yes">
+            <TYPE>StockItem</TYPE>
+            <FETCH>NAME, BASEUNITS</FETCH>
+          </COLLECTION>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
+  </BODY>
+</ENVELOPE>"""
+
+
+def fetch_stock_items(force_refresh: bool = False) -> list[dict]:
+    """
+    Returns the live list of stock items in the current Tally company as
+    [{"name": ..., "base_unit": ...}, ...]. Cached briefly per-company, same
+    pattern as fetch_ledgers — used so an item-wise voucher only creates a
+    stock item master for names that don't already exist, instead of
+    blindly re-creating (and risking altering) every item on every push.
+    """
+    from .config import get_tally_config
+
+    company = get_tally_config().get("company_name", "")
+
+    now = time.time()
+    if (
+        not force_refresh
+        and _STOCK_ITEM_CACHE["company"] == company
+        and now - _STOCK_ITEM_CACHE["at"] < _STOCK_ITEM_CACHE_TTL_SECONDS
+    ):
+        return _STOCK_ITEM_CACHE["items"]
+
+    xml = _STOCK_ITEM_LIST_REQUEST.format(company=xml_escape(company))
+    try:
+        resp = requests.post(_tally_url(), data=xml.encode("utf-8"), timeout=15)
+        resp.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        raise TallyConnectionError(f"Could not fetch stock item list from Tally: {e}")
+
+    items = []
+    clean_text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", resp.text)
+    try:
+        root = ET.fromstring(clean_text)
+        for si in root.iter("STOCKITEM"):
+            name = si.get("NAME") or (si.findtext("NAME") or "")
+            unit_el = si.find("BASEUNITS")
+            base_unit = unit_el.text if unit_el is not None else ""
+            if name:
+                items.append({"name": name.strip(), "base_unit": (base_unit or "").strip()})
+    except ET.ParseError:
+        for m in re.finditer(r'<STOCKITEM NAME="([^"]+)"', clean_text):
+            items.append({"name": m.group(1).strip(), "base_unit": ""})
+
+    _STOCK_ITEM_CACHE["company"] = company
+    _STOCK_ITEM_CACHE["at"] = now
+    _STOCK_ITEM_CACHE["items"] = items
+    return items

@@ -146,6 +146,61 @@ def _create_ledger_master_xml(name: str, under: str, gst_duty_type: str | None =
         </TALLYMESSAGE>"""
 
 
+def _stock_item_exists(stock_items: list[dict], name: str) -> bool:
+    if not name:
+        return False
+    name_lower = name.strip().lower()
+    return any(si["name"].strip().lower() == name_lower for si in stock_items)
+
+
+def _create_stock_item_master_xml(name: str, unit: str | None) -> str:
+    unit = unit or "Nos"
+    return f"""
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKITEM NAME="{xml_escape(name)}" ACTION="Create">
+            <NAME.LIST>
+              <NAME>{xml_escape(name)}</NAME>
+            </NAME.LIST>
+            <PARENT>Primary</PARENT>
+            <BASEUNITS>{xml_escape(unit)}</BASEUNITS>
+            <ISBATCHWISEON>No</ISBATCHWISEON>
+          </STOCKITEM>
+        </TALLYMESSAGE>"""
+
+
+def _inventory_entry(
+    stock_item: str,
+    qty: float | None,
+    unit: str | None,
+    price: float | None,
+    amount: float,
+    ledger_name: str,
+    is_deemed_positive: bool,
+) -> str:
+    amt_val = -abs(amount) if is_deemed_positive else abs(amount)
+    dp_str = "Yes" if is_deemed_positive else "No"
+    unit = unit or "Nos"
+    qty_val = qty if qty not in (None, 0) else 1
+
+    rate_tag = ""
+    if price:
+        rate_tag = f"\n          <RATE>{price:.2f}/{xml_escape(unit)}</RATE>"
+
+    return f"""
+        <ALLINVENTORYENTRIES.LIST>
+          <STOCKITEMNAME>{xml_escape(stock_item)}</STOCKITEMNAME>
+          <ISDEEMEDPOSITIVE>{dp_str}</ISDEEMEDPOSITIVE>{rate_tag}
+          <AMOUNT>{amt_val:.2f}</AMOUNT>
+          <ACTUALQTY>{qty_val} {xml_escape(unit)}</ACTUALQTY>
+          <BILLEDQTY>{qty_val} {xml_escape(unit)}</BILLEDQTY>
+          <ACCOUNTINGALLOCATIONS.LIST>
+            <LEDGERNAME>{xml_escape(ledger_name)}</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>{dp_str}</ISDEEMEDPOSITIVE>
+            <AMOUNT>{amt_val:.2f}</AMOUNT>
+          </ACCOUNTINGALLOCATIONS.LIST>
+        </ALLINVENTORYENTRIES.LIST>"""
+
+
 def _ledger_entry(name: str, amount: float, is_deemed_positive: bool, rate_pct: float | None = None) -> str:
     amt_val = -abs(amount) if is_deemed_positive else abs(amount)
     dp_str = "Yes" if is_deemed_positive else "No"
@@ -266,6 +321,159 @@ def build_voucher_xml(vch_type_str: str, tx: dict, config: dict, ledgers: list[d
     return "".join(masters) + voucher
 
 
+def build_item_voucher_xml(
+    vch_type_str: str,
+    tx: dict,
+    config: dict,
+    ledgers: list[dict] | None = None,
+    stock_items: list[dict] | None = None,
+) -> str:
+    """
+    Item-wise version of build_voucher_xml: emits ALLINVENTORYENTRIES.LIST
+    (one per stock item) instead of a single lump-sum ledger entry, for a
+    transaction that carries a tx["items"] list — see models.Transaction.items.
+    Falls back to build_voucher_xml if there are no items to work with.
+    """
+    ledgers = ledgers or []
+    stock_items = stock_items or []
+    items = tx.get("items") or []
+    if not items:
+        return build_voucher_xml(vch_type_str, tx, config, ledgers)
+
+    date = _tally_date(tx.get("date"))
+    party = tx.get("party") or "Unknown Party"
+    invoice_number = tx.get("invoice_number") or ""
+    narration = tx.get("narration") or f"Auto-entered by TEasy ({vch_type_str}){' #' + invoice_number if invoice_number else ''}"
+
+    total = round_rupee(tx.get("total_value")) or 0.0
+
+    raw_breakdown = tx.get("rate_breakdown")
+    breakdown = raw_breakdown if raw_breakdown else [{
+        "rate": float(tx.get("gst_rate") or 0.0),
+        "taxable_value": float(tx.get("taxable_value") or 0.0),
+        "cgst": float(tx.get("cgst") or 0.0),
+        "sgst": float(tx.get("sgst") or 0.0),
+        "igst": float(tx.get("igst") or 0.0),
+    }]
+
+    if vch_type_str.upper() in ["PURCHASE"]:
+        party_dp = False
+        main_dp = True
+    else:  # SALES, DEBIT NOTE
+        party_dp = True
+        main_dp = False
+
+    parent_group = "Sundry Creditors" if vch_type_str.upper() in ["PURCHASE", "DEBIT NOTE"] else "Sundry Debtors"
+    main_group = "Purchase Accounts" if vch_type_str.upper() in ["PURCHASE", "DEBIT NOTE"] else "Sales Accounts"
+    round_off_ledger = config.get("round_off_ledger") or "ROUNDOFF"
+
+    masters = []
+    if not _ledger_exists(ledgers, party):
+        masters.append(_create_ledger_master_xml(party, parent_group))
+
+    # One resolved sales/purchase ledger name per GST rate present, so each
+    # item's inventory allocation points at the right rate-wise account.
+    ledger_by_rate: dict[float, dict] = {}
+    for part in breakdown:
+        part_rate = float(part.get("rate") or 0.0)
+        if part_rate not in ledger_by_rate:
+            names = _resolve_ledger_names(vch_type_str, part_rate, config, ledgers)
+            ledger_by_rate[part_rate] = names
+            if not _ledger_exists(ledgers, names["main"]):
+                masters.append(_create_ledger_master_xml(names["main"], main_group))
+
+    entries = [_ledger_entry(party, total, is_deemed_positive=party_dp)]
+
+    calculated = 0.0
+    for item in items:
+        name = item.get("name") or "Unnamed Item"
+        item_rate = float(item.get("rate") or 0.0)
+        amount = float(item.get("amount") or 0.0)
+        calculated += amount
+
+        names = ledger_by_rate.get(item_rate)
+        if names is None:
+            names = _resolve_ledger_names(vch_type_str, item_rate, config, ledgers)
+            ledger_by_rate[item_rate] = names
+            if not _ledger_exists(ledgers, names["main"]):
+                masters.append(_create_ledger_master_xml(names["main"], main_group))
+
+        entries.append(_inventory_entry(
+            stock_item=name,
+            qty=item.get("qty"),
+            unit=item.get("unit"),
+            price=item.get("price"),
+            amount=amount,
+            ledger_name=names["main"],
+            is_deemed_positive=main_dp,
+        ))
+
+    # De-duplicated stock item master creation (once per distinct item name).
+    seen_items = set()
+    for item in items:
+        name = item.get("name") or "Unnamed Item"
+        if name in seen_items:
+            continue
+        seen_items.add(name)
+        if not _stock_item_exists(stock_items, name):
+            masters.append(_create_stock_item_master_xml(name, item.get("unit")))
+
+    # Tax ledgers (CGST/SGST/IGST) sit outside the inventory allocation,
+    # same as the plain ledger-only voucher.
+    for part in breakdown:
+        part_rate = float(part.get("rate") or 0.0)
+        part_cgst = float(part.get("cgst") or 0.0)
+        part_sgst = float(part.get("sgst") or 0.0)
+        part_igst = float(part.get("igst") or 0.0)
+        part_half_rate = part_rate / 2.0 if part_rate > 0 else None
+        names = ledger_by_rate.get(part_rate) or _resolve_ledger_names(vch_type_str, part_rate, config, ledgers)
+
+        if part_cgst > 0 and not _ledger_exists(ledgers, names["cgst"]):
+            masters.append(_create_ledger_master_xml(names["cgst"], "Duties & Taxes", "Central Tax"))
+        if part_sgst > 0 and not _ledger_exists(ledgers, names["sgst"]):
+            masters.append(_create_ledger_master_xml(names["sgst"], "Duties & Taxes", "State Tax"))
+        if part_igst > 0 and not _ledger_exists(ledgers, names["igst"]):
+            masters.append(_create_ledger_master_xml(names["igst"], "Duties & Taxes", "Integrated Tax"))
+
+        if part_cgst:
+            entries.append(_ledger_entry(names["cgst"], part_cgst, is_deemed_positive=main_dp, rate_pct=part_half_rate))
+            calculated += part_cgst
+        if part_sgst:
+            entries.append(_ledger_entry(names["sgst"], part_sgst, is_deemed_positive=main_dp, rate_pct=part_half_rate))
+            calculated += part_sgst
+        if part_igst:
+            entries.append(_ledger_entry(names["igst"], part_igst, is_deemed_positive=main_dp, rate_pct=part_rate))
+            calculated += part_igst
+
+    diff = round(total - calculated, 2)
+    if abs(diff) >= 0.01:
+        if not _ledger_exists(ledgers, round_off_ledger):
+            masters.append(_create_ledger_master_xml(round_off_ledger, "Indirect Expenses"))
+        if not party_dp:  # Purchase
+            round_off_dp = (diff > 0)
+        else:             # Sales / Debit Note
+            round_off_dp = (diff < 0)
+        entries.append(_ledger_entry(round_off_ledger, abs(diff), is_deemed_positive=round_off_dp))
+
+    vch_no_tag = f"<VOUCHERNUMBER>{xml_escape(invoice_number)}</VOUCHERNUMBER>" if invoice_number else ""
+
+    voucher = f"""
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER VCHTYPE="{vch_type_str}" ACTION="Create">
+            <DATE>{date}</DATE>
+            <VOUCHERTYPENAME>{vch_type_str}</VOUCHERTYPENAME>
+            {vch_no_tag}
+            <PARTYLEDGERNAME>{xml_escape(party)}</PARTYLEDGERNAME>
+            <REFERENCE>{xml_escape(invoice_number)}</REFERENCE>
+            <ISINVOICE>Yes</ISINVOICE>
+            <PERSISTEDVIEW>Invoice Voucher View</PERSISTEDVIEW>
+            <NARRATION>{xml_escape(narration)}</NARRATION>
+            {''.join(entries)}
+          </VOUCHER>
+        </TALLYMESSAGE>"""
+    return "".join(masters) + voucher
+
+
 def wrap_envelope(tally_messages_xml: str, company_name: str) -> str:
     return f"""<ENVELOPE>
   <HEADER>
@@ -341,5 +549,13 @@ def build_voucher_envelope(tx: dict, config: dict) -> str:
     else:
         vch_type = "Purchase"
 
-    message = build_voucher_xml(vch_type, tx, config, ledgers)
+    if tx.get("items"):
+        try:
+            from .tally_client import fetch_stock_items
+            stock_items = fetch_stock_items()
+        except Exception:
+            stock_items = []
+        message = build_item_voucher_xml(vch_type, tx, config, ledgers, stock_items)
+    else:
+        message = build_voucher_xml(vch_type, tx, config, ledgers)
     return wrap_envelope(message, config["company_name"])

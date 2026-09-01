@@ -409,6 +409,20 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
                 DUPLICATE?
               </span>
             )}
+            {tx.items && (() => {
+              let itemList = [];
+              try { itemList = JSON.parse(tx.items); } catch { itemList = []; }
+              if (!itemList.length) return null;
+              const names = itemList.map((it) => it.name).join(", ");
+              return (
+                <span
+                  className="ml-1.5 text-[10px] font-semibold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded"
+                  title={`Item-wise voucher (${itemList.length} item${itemList.length > 1 ? "s" : ""}): ${names}`}
+                >
+                  {itemList.length} ITEM{itemList.length > 1 ? "S" : ""}
+                </span>
+              );
+            })()}
           </td>
           {isBank ? (
             <td className="p-3 text-sm">
