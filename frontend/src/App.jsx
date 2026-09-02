@@ -61,7 +61,7 @@ export default function App() {
   }, []);
 
   const checkLicense = useCallback(() => {
-    api.getLicenseStatus()
+    return api.getLicenseStatus()
       .then(setLicense)
       .catch(() => setLicense({ activated: false, valid: false, status: "none" }));
   }, []);

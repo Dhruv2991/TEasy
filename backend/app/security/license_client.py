@@ -261,6 +261,20 @@ def is_valid_fast() -> bool:
     return _status_from_cache_only(_load_cache()).get("valid", False)
 
 
+def clear_license() -> None:
+    """Wipes the locally stored license_key so the app falls back to the
+    'start a trial / activate a key' screen. Used when the stored key is a
+    dead end — e.g. status 'unknown_key' (the license service has never
+    heard of it, so no amount of rechecking or subscribing against it will
+    ever succeed) — and the person needs to start fresh."""
+    cache = _load_cache()
+    cache.pop("license_key", None)
+    cache.pop("last_online_check", None)
+    cache.pop("valid", None)
+    cache.pop("status", None)
+    _save_cache(cache)
+
+
 def cancel_subscription() -> dict:
     """Cancels auto-renewal on whatever license_key is currently active.
     Access continues until the period already paid for ends — same

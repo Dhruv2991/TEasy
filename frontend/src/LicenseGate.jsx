@@ -18,10 +18,13 @@ export default function LicenseGate({ license, onRecheck }) {
   const [email, setEmail] = useState("");
   const [licenseKey, setLicenseKey] = useState("");
   const [busy, setBusy] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [stillPending, setStillPending] = useState(false);
 
   const expiredTrial = license?.status === "trial" || license?.status === "expired" || license?.status === "cancelled";
+  const isUnknownKey = license?.status === "unknown_key";
 
   const startTrial = async () => {
     if (!email.trim()) return setError("Enter your email to start the trial.");
@@ -64,11 +67,56 @@ export default function LicenseGate({ license, onRecheck }) {
   const subscribe = async () => {
     setBusy(true);
     setError("");
+    // Open the tab synchronously, in direct response to the click — a
+    // popup opened after an `await` (i.e. once the checkout URL comes
+    // back) is silently blocked by most browsers' popup blockers, with no
+    // error and no visible sign anything happened. Opening a blank tab
+    // now and pointing it at the real URL once we have it keeps this a
+    // "real" user-triggered popup the whole way through.
+    const checkoutTab = window.open("", "_blank");
     try {
       const { short_url } = await api.createSubscription();
-      window.open(short_url, "_blank");
+      if (checkoutTab) {
+        checkoutTab.location.href = short_url;
+      } else {
+        // The blank-tab open itself got blocked (rare, but some browsers
+        // block even that) — fall back to a same-tab link so the person
+        // isn't left with no way forward.
+        window.location.href = short_url;
+      }
     } catch (e) {
+      checkoutTab?.close();
       setError(e.message || "Couldn't start checkout.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const recheck = async () => {
+    setRechecking(true);
+    setStillPending(false);
+    setError("");
+    try {
+      await onRecheck();
+    } finally {
+      setRechecking(false);
+      // onRecheck() updates `license` asynchronously via the parent, so we
+      // can't know right here whether the status actually changed — give
+      // a moment, then if we're still looking at the same gated screen,
+      // say so explicitly instead of leaving the click looking like a
+      // no-op.
+      setTimeout(() => setStillPending(true), 600);
+    }
+  };
+
+  const resetLicense = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await api.resetLicense();
+      onRecheck();
+    } catch (e) {
+      setError(e.message || "Couldn't reset the license.");
     } finally {
       setBusy(false);
     }
@@ -84,27 +132,52 @@ export default function LicenseGate({ license, onRecheck }) {
         {license?.activated ? (
           <>
             <h1 className="text-xl font-semibold text-slate-900 mb-1">
-              {license.status === "trial" ? "Your trial has ended" : "Your subscription needs attention"}
+              {license.status === "trial"
+                ? "Your trial has ended"
+                : isUnknownKey
+                ? "This device's license key isn't recognized"
+                : "Your subscription needs attention"}
             </h1>
             <p className="text-sm text-slate-500 mb-6">
               {license.status === "trial"
                 ? "Subscribe to keep using TEasy — your data stays right where it is."
+                : isUnknownKey
+                ? "The license key saved on this device isn't on file with our billing system anymore (it may have been deleted or belongs to an old setup). Start a new trial or activate a different key to continue."
                 : `Current status: ${license.status}. Subscribe or renew to keep going.`}
             </p>
             {error && <p className="text-xs text-rose-600 mb-3">{error}</p>}
-            <button
-              onClick={subscribe}
-              disabled={busy}
-              className="w-full text-sm px-4 py-2.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
-            >
-              {busy ? "Opening checkout…" : "Subscribe with Razorpay"}
-            </button>
-            <button
-              onClick={onRecheck}
-              className="w-full text-sm px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 mt-2"
-            >
-              I already paid — recheck
-            </button>
+            {isUnknownKey ? (
+              <button
+                onClick={resetLicense}
+                disabled={busy}
+                className="w-full text-sm px-4 py-2.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+              >
+                {busy ? "Resetting…" : "Start a new trial / activate a key"}
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={subscribe}
+                  disabled={busy}
+                  className="w-full text-sm px-4 py-2.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                >
+                  {busy ? "Opening checkout…" : "Subscribe with Razorpay"}
+                </button>
+                <button
+                  onClick={recheck}
+                  disabled={rechecking}
+                  className="w-full text-sm px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 mt-2 disabled:opacity-50"
+                >
+                  {rechecking ? "Checking…" : "I already paid — recheck"}
+                </button>
+                {stillPending && !rechecking && (
+                  <p className="text-xs text-slate-400 mt-2">
+                    Still showing as {license.status} — Razorpay payments can take a minute or two to
+                    reach us. If you paid more than a few minutes ago, contact support.
+                  </p>
+                )}
+              </>
+            )}
             <ExpiryNote license={license} />
           </>
         ) : (

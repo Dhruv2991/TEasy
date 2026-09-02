@@ -81,6 +81,16 @@ def create_subscription(plan: str = "monthly", tier: str = "silver"):
         raise HTTPException(503, "Couldn't reach the billing server — check your internet connection and try again")
 
 
+@router.post("/reset")
+def reset():
+    """Clears a locally stored license key that the license service no
+    longer recognizes (status 'unknown_key') — there's nothing to recheck
+    or subscribe against once the server has forgotten the key, so this is
+    the way out of that dead end back to 'start a trial / activate a key'."""
+    license_client.clear_license()
+    return license_client.get_status()
+
+
 @router.post("/cancel-subscription")
 def cancel_subscription():
     try:

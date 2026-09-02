@@ -38,6 +38,7 @@ export const api = {
     }),
   createSubscription: (plan = "monthly", tier = "silver") =>
     req(`/api/license/create-subscription?plan=${encodeURIComponent(plan)}&tier=${encodeURIComponent(tier)}`, { method: "POST" }),
+  resetLicense: () => req("/api/license/reset", { method: "POST" }),
   cancelSubscription: () => req("/api/license/cancel-subscription", { method: "POST" }),
   getDeviceInfo: () => req("/api/license/device"),
 
