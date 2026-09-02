@@ -70,7 +70,7 @@ HEADER_VARIANTS = {
     "date": ["date", "billdate", "invoicedate", "trandate"],
     "invoice_number": ["invoiceno", "invoicenumber", "billno", "billnumber", "invno", "tranno"],
     "taxable_value": ["taxablevalue", "taxableamount", "amount", "netamount", "value"],
-    "gst_rate": ["gstrate", "taxrate", "rate", "gst%"],
+    "gst_rate": ["gstrate", "taxrate", "gstpercent", "gst%"],
     "cgst_amount": ["cgstamount", "cgst", "cgstamt"],
     "sgst_amount": ["sgstamount", "sgst", "sgstutamount", "sgstamt"],
     "igst_amount": ["igstamount", "igst", "igstamt"],
@@ -87,6 +87,32 @@ def _closest_rate(pct):
         return 0.0
     nearest = min(STANDARD_GST_RATES, key=lambda r: abs(r - pct))
     return nearest if abs(nearest - pct) <= 0.5 else round(pct, 2)
+
+
+def _sanitize_gst_rate(value) -> float:
+    """
+    Defensively normalizes a GST-rate cell so a bad header match (or an
+    Excel percentage-formatted cell that stores its raw underlying number
+    rather than the displayed %) can never surface as a nonsense rate like
+    "18000%" — which is exactly what happens if a column meant for
+    something else (an item's unit price, a discount %, ...) gets read as
+    the GST rate. Real GST rates in India top out at 28%, so anything that
+    doesn't reduce to a sane 0–28ish range after basic scale-correction is
+    dropped back to 0 (unresolved) rather than shown as-is.
+    """
+    if value is None:
+        return 0.0
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if v <= 0:
+        return 0.0
+    if v <= 1:
+        v *= 100  # a properly percentage-formatted cell, e.g. 0.18 -> 18
+    while v > 100:
+        v /= 100  # cell stored the same way Excel would show "1800%" for a typed 18
+    return _closest_rate(v) if v <= 30 else 0.0
 
 
 def _find_rate_buckets(sheet, header_row):
@@ -407,9 +433,9 @@ def _parse_item_template_excel(sheet) -> list[ParsedBillRow]:
                 break
 
         if rate == 0.0:
-            explicit_rate = _number(get(row, "gst_rate"))
+            explicit_rate = _sanitize_gst_rate(get(row, "gst_rate"))
             if explicit_rate:
-                rate = explicit_rate * 100 if 0 < explicit_rate <= 1 else explicit_rate
+                rate = explicit_rate
 
         round_off = _number(get(row, "round_off")) or 0.0
         line_total = round(amount + cgst + sgst + igst + round_off, 2)
@@ -514,9 +540,9 @@ def parse_bill_excel(file_path: str) -> list[ParsedBillRow]:
 
             rate_cell = get(row, "gst_rate")
             if rate_cell is not None:
-                rate = _number(rate_cell) or 0.0
-                if 0 < rate <= 1:
-                    rate *= 100
+                rate = _sanitize_gst_rate(rate_cell)
+                if not rate and taxable:
+                    rate = _closest_rate(((cgst + sgst + igst) / taxable) * 100)
             elif taxable:
                 rate = _closest_rate(((cgst + sgst + igst) / taxable) * 100)
             else:
