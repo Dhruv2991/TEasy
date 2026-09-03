@@ -66,10 +66,10 @@ def _number(value):
 
 
 HEADER_VARIANTS = {
-    "party": ["party", "partyname", "customername", "customer", "suppliername", "supplier", "name", "buyername", "sri", "vendorname", "vendor"],
-    "date": ["date", "billdate", "invoicedate", "trandate"],
-    "invoice_number": ["invoiceno", "invoicenumber", "billno", "billnumber", "invno", "tranno"],
-    "taxable_value": ["taxablevalue", "taxableamount", "amount", "netamount", "value"],
+    "party": ["party", "partyname", "partyledger", "customername", "customer", "suppliername", "supplier", "name", "buyername", "sri", "vendorname", "vendor"],
+    "date": ["date", "billdate", "invoicedate", "trandate", "vchdate"],
+    "invoice_number": ["invoiceno", "invoicenumber", "billno", "billnumber", "invno", "tranno", "vchno"],
+    "taxable_value": ["taxablevalue", "taxableamount", "taxable", "amount", "netamount", "value"],
     "gst_rate": ["gstrate", "taxrate", "gstpercent", "gst%"],
     "cgst_amount": ["cgstamount", "cgst", "cgstamt"],
     "sgst_amount": ["sgstamount", "sgst", "sgstutamount", "sgstamt"],
@@ -79,7 +79,7 @@ HEADER_VARIANTS = {
 
 STANDARD_GST_RATES = [0, 0.25, 1, 1.5, 3, 5, 6, 7.5, 12, 13.8, 18, 28]
 
-_RATE_BUCKET_RE = re.compile(r"(value|cgst|sgst|igst)\s*@\s*([\d.]+)\s*%?", re.IGNORECASE)
+_RATE_BUCKET_RE = re.compile(r"(value|taxable|taxablevalue|cgst|sgst|igst)\s*@\s*([\d.]+)\s*%?", re.IGNORECASE)
 
 
 def _closest_rate(pct):
@@ -123,6 +123,8 @@ def _find_rate_buckets(sheet, header_row):
         if not m:
             continue
         kind, quoted_rate = m.group(1).lower(), float(m.group(2))
+        if kind in ("taxable", "taxablevalue"):
+            kind = "value"
         rate = quoted_rate * 2 if kind in ("cgst", "sgst") else quoted_rate
         bucket = buckets.setdefault(rate, {"value_col": None, "cgst_col": None, "sgst_col": None, "igst_col": None})
         bucket[f"{kind}_col"] = col
@@ -338,16 +340,16 @@ def _consolidate_invoice_rows(raw_rows: list[ParsedBillRow]) -> list[ParsedBillR
 # "could not find a recognizable bill table" error.
 
 _ITEM_TEMPLATE_HEADERS = {
-    "date": ["vchdate"],
+    "date": ["vchdate", "date", "invoicedate", "billdate"],
     "vch_type": ["vchtype"],
-    "invoice_number": ["vchno"],
-    "party": ["partyledger"],
+    "invoice_number": ["vchno", "invoiceno", "invoicenumber", "billno", "billnumber"],
+    "party": ["partyledger", "party", "partyname", "customername", "customer"],
     "sales_ledger": ["salesledger"],
     "stock_item": ["stockitem"],
-    "quantity": ["quantity"],
+    "quantity": ["quantity", "qty"],
     "rate": ["rate"],
     "unit": ["unit"],
-    "amount": ["amount"],
+    "amount": ["amount", "taxable", "taxablevalue", "taxableamount", "netamount"],
     "narration": ["narration"],
     "gst_rate": ["gstrate"],
     "hsn": ["hsn"],
@@ -376,8 +378,11 @@ def _find_item_template_header_row(sheet) -> tuple[int, dict] | None:
                 if field_name not in found and value in variants:
                     found[field_name] = col
         # This template is only usable once we can identify the invoice
-        # number, party, and a per-line amount column.
-        if "invoice_number" in found and "party" in found and "amount" in found:
+        # number, party, and a per-line amount — either a flat Amount
+        # column, or per-rate "TAXABLE @n%" style bucket columns (Tally's
+        # own item-wise register export uses the latter).
+        has_amount = "amount" in found or _find_rate_buckets(sheet, row)
+        if "invoice_number" in found and "party" in found and has_amount:
             return row, found
     return None
 
@@ -393,16 +398,47 @@ def _parse_item_template_excel(sheet) -> list[ParsedBillRow]:
     for col in range(1, sheet.max_column + 1):
         rate_cols[_normalize(sheet.cell(header_row, col).value)] = col
 
+    # Some exports (e.g. Tally's own item-wise register export) repeat a
+    # "TAXABLE @n%" / "CGST @n%" / ... column per GST slab instead of a
+    # single flat Amount column — the same wide-bucket layout the generic
+    # (non-item) parser already understands via _find_rate_buckets. When
+    # that pattern is present alongside the item-template's Stock Item
+    # column, prefer the per-row bucket that actually has a value so both
+    # the rate/tax AND the stock item survive together instead of only
+    # the first bucket column being read (which silently dropped every
+    # other rate slab's amount).
+    rate_buckets = _find_rate_buckets(sheet, header_row)
+
     def get(row, name):
         col = cols.get(name)
         return sheet.cell(row, col).value if col else None
 
+    def bucket_amount(row, col):
+        return _number(sheet.cell(row, col).value) if col else 0.0
+
     raw_rows: list[ParsedBillRow] = []
     for row in range(header_row + 1, sheet.max_row + 1):
-        amount = _number(get(row, "amount"))
         invoice_number = str(get(row, "invoice_number") or "").strip() or None
         party = str(get(row, "party") or "").strip() or None
         stock_item = str(get(row, "stock_item") or "").strip() or None
+
+        amount = None
+        cgst = sgst = igst = 0.0
+        rate = 0.0
+
+        if rate_buckets:
+            for b in rate_buckets:
+                bval = bucket_amount(row, b["value_col"]) or 0.0
+                bcgst = bucket_amount(row, b["cgst_col"]) or 0.0
+                bsgst = bucket_amount(row, b["sgst_col"]) or 0.0
+                bigst = bucket_amount(row, b["igst_col"]) or 0.0
+                if abs(bval) > 0.004 or abs(bcgst) > 0.004 or abs(bsgst) > 0.004 or abs(bigst) > 0.004:
+                    amount = bval
+                    cgst, sgst, igst, rate = bcgst, bsgst, bigst, b["rate"]
+                    break
+
+        if amount is None:
+            amount = _number(get(row, "amount"))
 
         # A blank continuation row (e.g. a spacer, or a totals row with no
         # invoice number / amount) isn't a bill line — skip it rather than
@@ -419,18 +455,17 @@ def _parse_item_template_excel(sheet) -> list[ParsedBillRow]:
         if not invoice_number:
             base_warnings.append("No voucher number found on this row.")
 
-        cgst = sgst = igst = 0.0
-        rate = 0.0
-        for slab_rate, igst_key, cgst_key, sgst_key in _ITEM_TEMPLATE_RATE_SLABS:
-            v_igst = _number(sheet.cell(row, rate_cols[igst_key]).value) if igst_key in rate_cols else None
-            v_cgst = _number(sheet.cell(row, rate_cols[cgst_key]).value) if cgst_key in rate_cols else None
-            v_sgst = _number(sheet.cell(row, rate_cols[sgst_key]).value) if sgst_key in rate_cols else None
-            if (v_igst and abs(v_igst) > 0.004) or (v_cgst and abs(v_cgst) > 0.004) or (v_sgst and abs(v_sgst) > 0.004):
-                igst = round((v_igst or 0.0), 2)
-                cgst = round((v_cgst or 0.0), 2)
-                sgst = round((v_sgst or 0.0), 2)
-                rate = slab_rate
-                break
+        if rate == 0.0:
+            for slab_rate, igst_key, cgst_key, sgst_key in _ITEM_TEMPLATE_RATE_SLABS:
+                v_igst = _number(sheet.cell(row, rate_cols[igst_key]).value) if igst_key in rate_cols else None
+                v_cgst = _number(sheet.cell(row, rate_cols[cgst_key]).value) if cgst_key in rate_cols else None
+                v_sgst = _number(sheet.cell(row, rate_cols[sgst_key]).value) if sgst_key in rate_cols else None
+                if (v_igst and abs(v_igst) > 0.004) or (v_cgst and abs(v_cgst) > 0.004) or (v_sgst and abs(v_sgst) > 0.004):
+                    igst = round((v_igst or 0.0), 2)
+                    cgst = round((v_cgst or 0.0), 2)
+                    sgst = round((v_sgst or 0.0), 2)
+                    rate = slab_rate
+                    break
 
         if rate == 0.0:
             explicit_rate = _sanitize_gst_rate(get(row, "gst_rate"))
