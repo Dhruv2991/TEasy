@@ -23,16 +23,51 @@
   observer.observe(receipt);
 })();
 
+// -------- Windows installer download (one-time link, requested fresh on every click) --------
+(function () {
+  const buttons = document.querySelectorAll("[data-download-installer]");
+  if (!buttons.length) return;
+
+  buttons.forEach((btn) => {
+    const originalLabel = btn.textContent;
+
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      if (btn.dataset.busy === "1") return; // guard against double-clicks while a request is in flight
+      btn.dataset.busy = "1";
+      btn.textContent = "Preparing download…";
+
+      try {
+        const base = window.TEASY_CONFIG && window.TEASY_CONFIG.LICENSE_SERVICE_URL;
+        if (!base) throw new Error("Download isn't configured yet.");
+
+        const res = await fetch(`${base}/download/installer/request`, { method: "POST" });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.detail || "Couldn't start the download — try again in a moment.");
+        }
+        const data = await res.json();
+        // Each link from this endpoint is single-use, so navigate straight
+        // to it rather than caching/reusing btn.href — a second click
+        // always asks for (and gets) a brand new one.
+        window.location.href = `${base}${data.url}`;
+      } catch (err) {
+        alert(err.message || "Couldn't start the download — try again in a moment.");
+      } finally {
+        btn.dataset.busy = "0";
+        btn.textContent = originalLabel;
+      }
+    });
+  });
+})();
+
 // -------- trial signup --------
 (function () {
   const form = document.getElementById("trial-form");
   const note = document.getElementById("trial-note");
   const result = document.getElementById("trial-result");
   const keyEl = document.getElementById("trial-key");
-  const downloadLink = document.getElementById("download-link");
   if (!form) return;
-
-  downloadLink.href = (window.TEASY_CONFIG && window.TEASY_CONFIG.WINDOWS_DOWNLOAD_URL) || "#";
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();

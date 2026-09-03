@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TEasy — Complete User Guide</title>
+<style>
+  :root{
+    --sidebar-bg:#0f172a; --sidebar-active:#4f46e5; --sidebar-badge:#f59e0b;
+    --sidebar-sub:#94a3b8; --sidebar-card:#1e293b; --sidebar-text:#cbd5e1;
+    --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --violet:#7c3aed;
+    --green:#059669; --rose:#e11d48; --amber:#d97706;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--ink);
+       max-width:980px;margin:0 auto;padding:40px 24px 100px;background:#f8fafc;line-height:1.5;}
+  h1{font-size:30px;margin-bottom:4px;}
+  h2.section{font-size:22px;margin-top:64px;padding-top:24px;border-top:3px solid var(--sidebar-active);
+             display:flex;align-items:center;gap:10px;}
+  .step-num{background:var(--sidebar-active);color:#fff;width:32px;height:32px;border-radius:8px;
+            display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex:none;}
+  h3{font-size:16px;margin:28px 0 8px;color:var(--ink);}
+  p{color:#334155;font-size:14.5px;}
+  .lede{color:var(--muted);font-size:16px;margin-top:0;}
+  .note{background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:12px 16px;font-size:13.5px;color:#3730a3;margin:14px 0;}
+  .warn{background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:12px 16px;font-size:13.5px;color:#9a3412;margin:14px 0;}
+  .caption{font-size:12.5px;color:var(--muted);text-align:center;margin-top:6px;font-style:italic;}
+  .mock{border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 4px 18px rgba(15,23,42,.08);margin:16px 0;background:#fff;}
+  .mock-frame-title{font-size:11px;background:#f1f5f9;color:#64748b;padding:6px 12px;border-bottom:1px solid var(--line);
+                     font-family:ui-monospace,monospace;}
+  /* App shell mockup */
+  .app-shell{display:flex;min-height:420px;font-size:13px;}
+  .m-sidebar{width:200px;background:var(--sidebar-bg);color:#fff;flex:none;padding-bottom:10px;}
+  .m-sb-head{display:flex;align-items:center;gap:8px;padding:14px 12px;border-bottom:1px solid #1e293b;}
+  .m-logo{width:28px;height:28px;border-radius:7px;background:var(--sidebar-active);display:flex;align-items:center;
+          justify-content:center;font-weight:800;font-size:12px;}
+  .m-sb-title{font-weight:600;font-size:13px;}
+  .m-sb-sub{font-size:10px;color:var(--sidebar-sub);}
+  .m-section-label{color:#64748b;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;padding:12px 12px 4px;}
+  .m-nav-item{padding:7px 12px;margin:0 8px;border-radius:7px;color:var(--sidebar-text);font-size:12px;cursor:default;
+              display:flex;justify-content:space-between;align-items:center;}
+  .m-nav-item.active{background:var(--sidebar-active);color:#fff;}
+  .m-badge{background:var(--sidebar-badge);color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;font-weight:700;}
+  .m-sb-foot{margin:14px 8px 0;background:var(--sidebar-card);border-radius:8px;padding:10px;font-size:11px;}
+  .m-dot{width:7px;height:7px;border-radius:99px;display:inline-block;margin-right:5px;}
+  .m-main{flex:1;padding:18px 22px;background:#fff;overflow:auto;}
+  .m-h1{font-size:17px;font-weight:700;margin:0 0 2px;}
+  .m-h1sub{font-size:12px;color:var(--muted);margin-bottom:16px;}
+  .m-btn{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:6px 13px;border-radius:8px;
+         border:1px solid #cbd5e1;background:#fff;color:#334155;font-weight:500;}
+  .m-btn.primary{background:var(--violet);border-color:var(--violet);color:#fff;}
+  .m-btn.dark{background:#0f172a;border-color:#0f172a;color:#fff;}
+  .m-btn.green{background:#ecfdf5;border-color:#a7f3d0;color:var(--green);}
+  .m-btn.red{background:#fff1f2;border-color:#fecdd3;color:var(--rose);}
+  table.m-table{border-collapse:collapse;width:100%;font-size:11.5px;margin-top:6px;}
+  table.m-table th{text-align:left;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.03em;
+                    padding:7px 8px;border-bottom:1px solid var(--line);}
+  table.m-table td{padding:8px;border-bottom:1px solid #f1f5f9;color:#334155;vertical-align:middle;}
+  .pill{border-radius:99px;font-size:10px;font-weight:700;padding:2px 9px;display:inline-block;}
+  .pill.green{background:#dcfce7;color:#166534;}
+  .pill.red{background:#fee2e2;color:#b91c1c;}
+  .pill.amber{background:#fef3c7;color:#92400e;}
+  .pill.indigo{background:#e0e7ff;color:#3730a3;}
+  .dropzone{border:2px dashed #cbd5e1;border-radius:12px;background:#f8fafc;text-align:center;padding:26px 10px;color:#94a3b8;font-size:12.5px;}
+  .kv{display:grid;grid-template-columns:150px 1fr;gap:6px 14px;font-size:12.5px;margin-top:8px;}
+  .kv div:nth-child(odd){color:#64748b;}
+  .kv input.m-input{width:100%;}
+  .m-input{border:1px solid #cbd5e1;border-radius:6px;padding:6px 9px;font-size:12px;color:#334155;background:#fff;}
+  .flow-arrow{text-align:center;color:#94a3b8;font-size:22px;margin:2px 0;}
+  ul.checklist{list-style:none;padding-left:0;}
+  ul.checklist li{padding:4px 0 4px 26px;position:relative;font-size:14px;color:#334155;}
+  ul.checklist li::before{content:"✓";position:absolute;left:0;color:var(--green);font-weight:800;}
+  .toc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin-top:22px;}
+  .toc a{color:#4f46e5;text-decoration:none;font-size:14px;}
+  .toc li{margin:6px 0;}
+  .badge-real{display:inline-block;font-size:10.5px;background:#fee2e2;color:#991b1b;border-radius:6px;padding:2px 8px;
+              font-weight:700;margin-left:8px;vertical-align:middle;}
+</style>
+</head>
+<body>
+
+<h1>TEasy — Complete User Guide</h1>
+<p class="lede">From installing TEasy to pushing your first voucher into Tally, step by step.</p>
+
+<div class="note">
+<strong>About the pictures in this guide:</strong> these are accurate mockups rebuilt directly from TEasy's own
+source code — same screen names, same field labels, same button text, same colors as your real sidebar (dark
+navy with the indigo highlight) and Review table. They are not literal screenshots of a running session, since
+this guide was put together without access to a live, logged-in copy of your app. Everything they show matches
+what you'll actually see.
+</div>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+<li><a href="#step1">Activate your license (trial / subscribe)</a></li>
+<li><a href="#step2">First-run setup &amp; connecting to Tally</a></li>
+<li><a href="#step3">Getting around: the sidebar</a></li>
+<li><a href="#step4">Uploading documents (Sales / Purchase / GSTR-2B)</a></li>
+<li><a href="#step5">Review &amp; Approve</a></li>
+<li><a href="#step6">Pushing approved transactions to Tally</a></li>
+<li><a href="#step7">Handling duplicates &amp; item-wise vouchers</a></li>
+<li><a href="#step8">Pending Issues, Reports &amp; Reconciliation</a></li>
+<li><a href="#step9">Companies, Parties &amp; GST Settings</a></li>
+<li><a href="#step10">Account &amp; Billing</a></li>
+</ol>
+</div>
+
+<!-- ================= STEP 1 ================= -->
+<h2 class="section" id="step1"><span class="step-num">1</span> Activate your license</h2>
+<p>The first time you open TEasy (or whenever your subscription needs attention), you'll land on the license
+screen before you can reach the app itself.</p>
+
+<div class="mock">
+  <div class="mock-frame-title">TEasy — License Gate</div>
+  <div style="padding:40px;display:flex;justify-content:center;background:#f8fafc;">
+    <div style="background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px 32px;width:380px;box-shadow:0 6px 24px rgba(15,23,42,.08);">
+      <div style="width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,#8b5cf6,#6d28d9);
+                  color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center;margin-bottom:16px;">T</div>
+      <div style="font-weight:700;font-size:17px;margin-bottom:4px;">Your subscription needs attention</div>
+      <div style="font-size:12.5px;color:#64748b;margin-bottom:18px;">Current status: trial. Subscribe or renew to keep going.</div>
+      <div class="m-btn primary" style="width:100%;justify-content:center;padding:10px;">Subscribe with Razorpay</div>
+      <div class="m-btn" style="width:100%;justify-content:center;padding:10px;margin-top:8px;">I already paid — recheck</div>
+    </div>
+  </div>
+</div>
+<p class="caption">The license gate. What it shows depends on your status: a fresh trial, an expired trial, or a
+subscription that's lapsed.</p>
+
+<h3>What to do here</h3>
+<ul class="checklist">
+  <li>New install → you're automatically on a free trial; the app opens straight to the Dashboard.</li>
+  <li>Trial ended or subscription lapsed → tap <strong>Subscribe with Razorpay</strong>. A checkout tab opens; complete
+      payment there, then come back to TEasy.</li>
+  <li>Just paid, but the screen hasn't updated → tap <strong>I already paid — recheck</strong>. It re-checks your
+      status; Razorpay payments can take a minute or two to register.</li>
+  <li>Already have a license key from a different setup → use the activate-a-key option on the welcome screen
+      instead of starting a new trial.</li>
+</ul>
+<div class="warn"><strong>If you see "This device's license key isn't recognized":</strong> your locally stored
+key is no longer on file with our billing system. Recheck won't help here — use the
+<strong>Start a new trial / activate a key</strong> button to reset and begin again.</div>
+
+<!-- ================= STEP 2 ================= -->
+<h2 class="section" id="step2"><span class="step-num">2</span> First-run setup &amp; connecting to Tally</h2>
+<p>Once your license checks out, TEasy needs to know which Tally company to talk to. Make sure
+<strong>Tally is open</strong> on the same machine (or reachable on your network) with its XML/HTTP gateway
+port enabled before you connect.</p>
+
+<div class="mock">
+  <div class="mock-frame-title">Tally Integration</div>
+  <div style="padding:20px;background:#fff;">
+    <div class="m-h1">Tally Connection</div>
+    <div class="kv">
+      <div>Tally Host</div><div><span class="m-input">localhost</span></div>
+      <div>Tally Port</div><div><span class="m-input">9000</span></div>
+      <div>Company Name</div><div><span class="m-input">Your Company (as it appears in Tally)</span></div>
+      <div>Status</div><div><span class="pill green">CONNECTED</span></div>
+    </div>
+    <div style="margin-top:14px;"><span class="m-btn dark">Test Connection</span> <span class="m-btn">Save</span></div>
+  </div>
+</div>
+<p class="caption">Tally Integration page — connection settings live here, and the same "Connected / Not
+connected" indicator also sits at the bottom of the sidebar at all times.</p>
+
+<h3>Steps</h3>
+<ol>
+  <li>Open Tally on the machine TEasy can reach, load your company, and enable the ODBC/HTTP gateway
+      (Tally → F12 → Advanced Configuration, or your usual Tally Server settings) on the port you'll enter below.</li>
+  <li>In TEasy, go to <strong>Tally Integration</strong> in the sidebar.</li>
+  <li>Enter the host (usually <code>localhost</code> if TEasy and Tally are on the same PC), the port
+      (commonly <code>9000</code>), and the exact company name as it appears inside Tally.</li>
+  <li>Click <strong>Test Connection</strong> — you should see it flip to <strong>Connected</strong>.</li>
+  <li>Save. The sidebar's "Tally Status" indicator should now show a green dot.</li>
+</ol>
+<div class="note">If the test fails: double-check Tally is actually open with that exact company loaded, the
+port matches Tally's configured gateway port, and no firewall is blocking that port on the host machine.</div>
+
+<!-- ================= STEP 3 ================= -->
+<h2 class="section" id="step3"><span class="step-num">3</span> Getting around: the sidebar</h2>
+<p>Every screen in TEasy is one click away from the sidebar on the left. Here's what each section does.</p>
+
+<div class="mock">
+  <div class="mock-frame-title">Full app shell</div>
+  <div class="app-shell">
+    <div class="m-sidebar">
+      <div class="m-sb-head">
+        <div class="m-logo">AI</div>
+        <div><div class="m-sb-title">TEasy</div><div class="m-sb-sub">Accounting Assistant</div></div>
+      </div>
+      <div class="m-section-label">Main</div>
+      <div class="m-nav-item active">Dashboard</div>
+      <div class="m-nav-item">Documents</div>
+      <div class="m-nav-item">Transactions</div>
+      <div class="m-nav-item">Bank Statements</div>
+      <div class="m-nav-item">Tally Integration</div>
+      <div class="m-nav-item">Reports</div>
+      <div class="m-section-label">Documents</div>
+      <div class="m-nav-item">Sales Bills</div>
+      <div class="m-nav-item">Purchase (B2B Excel)</div>
+      <div class="m-nav-item">Discount (GSTR-2B Excel)</div>
+      <div class="m-section-label">Workflow</div>
+      <div class="m-nav-item">Review &amp; Approve <span class="m-badge">4</span></div>
+      <div class="m-nav-item">Pending Issues <span class="m-badge">1</span></div>
+      <div class="m-section-label">Settings</div>
+      <div class="m-nav-item">Companies</div>
+      <div class="m-nav-item">Parties &amp; Ledgers</div>
+      <div class="m-nav-item">GST Settings</div>
+      <div class="m-nav-item">Users</div>
+      <div class="m-nav-item">Account &amp; Billing</div>
+      <div class="m-nav-item">General Settings</div>
+      <div class="m-sb-foot">
+        <div><span class="m-dot" style="background:#34d399;"></span><strong>Tally Status</strong></div>
+        <div style="color:#34d399;margin:2px 0 8px;">Connected</div>
+        <div class="m-btn" style="width:100%;justify-content:center;background:#334155;border-color:#334155;color:#fff;font-size:11px;">Manage</div>
+      </div>
+    </div>
+    <div class="m-main">
+      <div class="m-h1">Dashboard</div>
+      <div class="m-h1sub">A quick snapshot of what needs your attention.</div>
+      <p style="color:#94a3b8;font-size:12px;">(Recent uploads, pending review count, Tally connection status, and quick links live here.)</p>
+    </div>
+  </div>
+</div>
+<p class="caption">Sidebar sections, top to bottom: <strong>Main</strong> (dashboard &amp; overview),
+<strong>Documents</strong> (where you upload each document type), <strong>Workflow</strong> (Review &amp;
+Approve is where most of your day-to-day work happens), and <strong>Settings</strong>.</p>
+
+<!-- ================= STEP 4 ================= -->
+<h2 class="section" id="step4"><span class="step-num">4</span> Uploading documents</h2>
+<p>TEasy has a dedicated upload page per document type — <strong>Sales Bills</strong>, <strong>Purchase
+(B2B Excel)</strong>, and <strong>Discount (GSTR-2B Excel)</strong> — all under the sidebar's Documents section.
+You can drop in a bill photo/PDF, or an Excel sheet (including Tally's own item-wise voucher template).</p>
+
+<div class="mock">
+  <div class="mock-frame-title">Sales Bills — upload</div>
+  <div style="padding:22px;background:#fff;">
+    <div class="m-h1">Sales Bills</div>
+    <div class="m-h1sub">Upload bill photos or an Excel sheet of sales bills.</div>
+    <div class="dropzone">
+      ⬆<br><br>Drop a bill photo here, or choose a file<br><br>
+      <span class="m-btn dark">Choose file</span>
+    </div>
+    <div style="margin-top:14px;font-size:12px;color:#64748b;">
+      <div style="display:flex;justify-content:space-between;border:1px solid #f1f5f9;border-radius:8px;padding:6px 10px;margin-bottom:5px;">
+        <span>sales_template.xlsx</span><span style="color:#059669;">Done</span></div>
+    </div>
+  </div>
+</div>
+<p class="caption">Upload box — accepts single files or a multi-file batch depending on the page. Each file is
+processed automatically after upload; you don't need to do anything else here.</p>
+
+<h3>What happens after you upload</h3>
+<ol>
+  <li>TEasy reads the file — a photo/PDF goes through OCR, an Excel sheet is parsed directly (it recognizes both a
+      plain "one row per bill" layout and Tally's own item-wise voucher template with Stock Item / Qty / Rate columns).</li>
+  <li>Every bill line becomes a draft transaction with status <strong>NEEDS_REVIEW</strong>.</li>
+  <li>Lines that share the same invoice number and party get automatically combined into a single voucher — so a
+      multi-item or multi-GST-rate bill still becomes just one entry, not several.</li>
+  <li>The <strong>Review &amp; Approve</strong> badge count in the sidebar goes up by however many new transactions
+      just landed there.</li>
+</ol>
+
+<!-- ================= STEP 5 ================= -->
+<h2 class="section" id="step5"><span class="step-num">5</span> Review &amp; Approve</h2>
+<p>This is the heart of TEasy — every transaction waits here for you to check it over before anything touches Tally.</p>
+
+<div class="mock">
+  <div class="mock-frame-title">Review &amp; Approve</div>
+  <div style="padding:18px 20px;background:#fff;overflow-x:auto;">
+    <table class="m-table">
+      <tr><th></th><th>Bill</th><th>Party</th><th>Date</th><th>Invoice #</th><th>Total</th><th>GST %</th>
+          <th>Confidence</th><th>Status</th><th>Tally</th><th>Actions</th></tr>
+      <tr>
+        <td><input type="checkbox"></td><td>📄</td><td>Cash</td><td>2026-04-01</td>
+        <td>INV-101</td><td><strong>₹29,500.00</strong></td><td>18%</td>
+        <td style="color:#059669;">100%</td><td><span class="pill green">APPROVED</span></td>
+        <td><span class="pill indigo">SENT</span></td>
+        <td><span class="m-btn" style="font-size:10.5px;padding:3px 8px;">Edit</span></td>
+      </tr>
+      <tr>
+        <td><input type="checkbox"></td><td>📄</td><td>ABC Traders</td><td>2026-04-02</td>
+        <td>INV-102 <span style="font-size:9px;background:#e0e7ff;color:#3730a3;border-radius:5px;padding:1px 5px;margin-left:3px;">2 ITEMS</span></td>
+        <td><strong>₹97,025.00</strong></td><td>18% / 5%</td>
+        <td style="color:#059669;">96%</td><td><span class="pill amber">NEEDS_REVIEW</span></td>
+        <td>—</td>
+        <td><span class="m-btn green" style="font-size:10.5px;padding:3px 8px;">Approve</span></td>
+      </tr>
+      <tr>
+        <td><input type="checkbox"></td><td>📄</td><td>Ramesh Traders</td><td>2026-04-05</td>
+        <td>INV-200 <span style="font-size:9px;background:#fee2e2;color:#be123c;border-radius:5px;padding:1px 5px;margin-left:3px;">DUPLICATE?</span></td>
+        <td><strong>₹17,700.00</strong></td><td>18%</td>
+        <td style="color:#d97706;">88%</td><td><span class="pill amber">NEEDS_REVIEW</span></td>
+        <td>—</td>
+        <td><span class="m-btn red" style="font-size:10.5px;padding:3px 8px;">Reject</span></td>
+      </tr>
+    </table>
+    <div style="margin-top:14px;display:flex;gap:8px;">
+      <span class="m-btn green">Approve Selected</span>
+      <span class="m-btn dark">Push Approved to Tally</span>
+    </div>
+  </div>
+</div>
+<p class="caption">Each row is one bill. The little badges next to the invoice number flag things worth a second
+look — <span style="color:#3730a3;">item-wise vouchers</span> and <span style="color:#be123c;">possible
+duplicates</span> — before you approve.</p>
+
+<h3>Working through this screen</h3>
+<ol>
+  <li><strong>Check the numbers</strong> — party, date, invoice #, total, GST% and its breakdown are all pulled
+      automatically; the Confidence column tells you how sure TEasy is.</li>
+  <li>If something's off, hit <strong>Edit</strong> to correct the party, date, amounts, or GST rate by hand.</li>
+  <li>If a row is flagged <strong>DUPLICATE?</strong>, check it against what's already in Tally before approving —
+      it means TEasy found an earlier transaction with the same party, invoice number, and amount.</li>
+  <li>Once a row looks right, click <strong>Approve</strong> (or tick several boxes and use <strong>Approve
+      Selected</strong>).</li>
+  <li>Wrong entry entirely (e.g. not a real bill, or a genuine duplicate)? Click <strong>Reject</strong> — it
+      won't be pushed and won't keep nagging you.</li>
+</ol>
+
+<!-- ================= STEP 6 ================= -->
+<h2 class="section" id="step6"><span class="step-num">6</span> Pushing approved transactions to Tally</h2>
+<p>Approving a transaction doesn't send it to Tally by itself — that's a separate, deliberate step, so you're
+always in control of exactly what gets written into your books.</p>
+<ol>
+  <li>From <strong>Review &amp; Approve</strong>, once you're happy with a batch of <span class="pill green">APPROVED</span> rows, click
+      <strong>Push Approved to Tally</strong> (you can also push a single row from its own Actions menu).</li>
+  <li>TEasy builds the correct Tally voucher XML for each one — Sales, Purchase, or Debit/Credit Note — and sends
+      it straight to Tally's gateway.</li>
+  <li>Any ledger or stock item that doesn't exist in Tally yet gets auto-created (Sundry Debtors/Creditors, Sales/
+      Purchase Accounts, CGST/SGST/IGST ledgers, stock items) so the push doesn't fail on a missing master.</li>
+  <li>The <strong>Tally</strong> column updates to <span class="pill indigo">SENT</span> on success, or
+      <span class="pill red">FAILED</span> with the reason if Tally rejected it.</li>
+</ol>
+<div class="warn"><strong>If a push fails:</strong> the Tally column shows why (hover or open the row). Common
+causes are Tally not being open/connected, the company name not matching exactly, or a required field (like a
+missing date) that needs fixing back in Review &amp; Approve before you retry.</div>
+
+<!-- ================= STEP 7 ================= -->
+<h2 class="section" id="step7"><span class="step-num">7</span> Duplicates &amp; item-wise vouchers</h2>
+
+<h3>Duplicate detection</h3>
+<p>TEasy only flags a bill as a possible duplicate when the <strong>party, invoice number, and amount all
+match</strong> an existing transaction. The same invoice number showing up again with a different party or a
+different amount is treated as a normal, separate bill — which is common (different sellers reuse invoice
+numbers, or the same invoice number gets corrected later with a different total).</p>
+
+<h3>Item-wise vouchers</h3>
+<p>When an uploaded sheet lists individual stock items (Tally's own item-wise voucher template — Stock Item,
+Quantity, Rate, Amount, plus GST-slab columns), TEasy keeps that detail all the way through to Tally: the voucher
+it pushes carries a proper line per stock item rather than a single lump-sum amount, and it'll auto-create any
+stock item master that doesn't already exist in Tally. You'll see an <strong>"N ITEMS"</strong> badge in Review
+&amp; Approve on any row that came in this way — hover it to see which items are on the bill.</p>
+
+<!-- ================= STEP 8 ================= -->
+<h2 class="section" id="step8"><span class="step-num">8</span> Pending Issues, Reports &amp; Reconciliation</h2>
+<div class="kv" style="grid-template-columns:170px 1fr;">
+  <div><strong>Pending Issues</strong></div><div>Anything TEasy couldn't fully resolve on its own — low-confidence
+    reads, missing dates, or failed pushes — collects here so it doesn't get lost in the main Review list. The
+    sidebar badge tells you how many are waiting.</div>
+  <div><strong>Reports</strong></div><div>Summary views over your processed transactions — useful for a quick
+    sanity check of totals and tax before you close a period.</div>
+  <div><strong>Transactions</strong></div><div>Every transaction TEasy has ever processed, approved or not,
+    searchable and filterable — your full audit trail.</div>
+  <div><strong>Reconciled</strong></div><div>A column on the Review table showing whether a transaction has been
+    matched against a bank statement line, once you've uploaded one under Bank Statements.</div>
+</div>
+
+<!-- ================= STEP 9 ================= -->
+<h2 class="section" id="step9"><span class="step-num">9</span> Companies, Parties &amp; GST Settings</h2>
+<ul class="checklist">
+  <li><strong>Companies</strong> — manage which Tally company (or companies) TEasy is set up to work with.</li>
+  <li><strong>Parties &amp; Ledgers</strong> — review how party names in your bills map to ledgers in Tally, and
+      fix any mismatches so future auto-creation picks the right ledger group.</li>
+  <li><strong>GST Settings</strong> — the ledger names TEasy uses for CGST/SGST/IGST and your default sales/
+      purchase accounts per rate, plus your round-off ledger.</li>
+  <li><strong>Users</strong> — manage who on your team has access.</li>
+</ul>
+
+<!-- ================= STEP 10 ================= -->
+<h2 class="section" id="step10"><span class="step-num">10</span> Account &amp; Billing</h2>
+<p>Your plan, renewal date, and payment history live under <strong>Account &amp; Billing</strong> in the
+sidebar — the same place you'd go to cancel or change your subscription, separate from the license gate you only
+see when something needs attention.</p>
+
+<div class="note" style="margin-top:50px;">
+That's the full loop: <strong>connect Tally → upload a document → review it → approve it → push it</strong>.
+Everything else in the sidebar (Reports, Reconciliation, Settings) supports that core loop rather than replacing it.
+</div>
+
+</body>
+</html>

@@ -238,6 +238,93 @@ def health():
     return {"status": "ok"}
 
 
+# ---------------------------------------------------------------------------
+# Windows installer download — one-time links
+#
+# The landing page never links straight to the .exe. Instead the browser
+# asks here for a fresh link right when someone clicks Download; that link
+# works exactly once and is discarded the moment it's used (or after
+# DOWNLOAD_TOKEN_TTL_SECONDS, whichever comes first).
+#
+# Two ways to serve the actual file — pick whichever fits how you're already
+# hosting it:
+#
+#   INSTALLER_DOWNLOAD_URL   Preferred. Point this at your existing GitHub
+#                            Releases asset link (the same one you had in
+#                            Vercel's WINDOWS_DOWNLOAD_URL before) — the
+#                            token endpoint just 302-redirects there once the
+#                            token checks out, so the big binary itself still
+#                            lives on GitHub, not on this service's disk.
+#                            Note the one-time protection is then "soft": the
+#                            GitHub asset URL itself doesn't expire, so
+#                            anyone who inspects the network request and
+#                            copies THAT url directly can reuse it. It still
+#                            stops plain hotlinking/scraping of the button on
+#                            the landing page, which is the main goal.
+#
+#   INSTALLER_FILE_PATH      Fallback if INSTALLER_DOWNLOAD_URL isn't set —
+#                            streams a local file from this service's own
+#                            disk instead. True one-time enforcement, but
+#                            needs a *persistent* disk (Render/Railway's
+#                            default is ephemeral and wipes on every
+#                            redeploy/restart) — see the docstring for the
+#                            request endpoint below.
+#
+# Caveat either way: tokens live in memory, so they don't survive a restart
+# and won't be shared across multiple worker processes/instances. Fine for a
+# single-instance deploy (which this whole service already assumes — see
+# the trial-reminder loop above); if you ever scale to multiple instances,
+# move this to Redis or the database instead.
+# ---------------------------------------------------------------------------
+INSTALLER_DOWNLOAD_URL = os.environ.get("INSTALLER_DOWNLOAD_URL", "")
+INSTALLER_FILE_PATH = os.environ.get("INSTALLER_FILE_PATH", "downloads/TEasy-Setup.exe")
+INSTALLER_FILENAME = os.environ.get("INSTALLER_FILENAME", "TEasy-Setup.exe")
+DOWNLOAD_TOKEN_TTL_SECONDS = 15 * 60
+
+_download_tokens: dict[str, float] = {}  # token -> expires_at (epoch seconds)
+
+
+def _prune_expired_tokens():
+    now = _now().timestamp()
+    expired = [t for t, exp in _download_tokens.items() if exp <= now]
+    for t in expired:
+        _download_tokens.pop(t, None)
+
+
+@app.post("/download/installer/request")
+@limiter.limit("10/minute")
+def request_installer_download(request: Request):
+    if not INSTALLER_DOWNLOAD_URL and not os.path.exists(INSTALLER_FILE_PATH):
+        raise HTTPException(
+            status_code=503,
+            detail="The installer isn't set up yet — set INSTALLER_DOWNLOAD_URL (recommended, e.g. your GitHub "
+                   "Releases link) or INSTALLER_FILE_PATH on the license service.",
+        )
+    _prune_expired_tokens()
+    import secrets
+    token = secrets.token_urlsafe(24)
+    _download_tokens[token] = _now().timestamp() + DOWNLOAD_TOKEN_TTL_SECONDS
+    return {"url": f"/download/installer/{token}", "expires_in": DOWNLOAD_TOKEN_TTL_SECONDS}
+
+
+@app.get("/download/installer/{token}")
+def download_installer(token: str):
+    from fastapi.responses import FileResponse, RedirectResponse
+
+    expires_at = _download_tokens.pop(token, None)  # pop == single-use: gone whether it's valid or not
+    if expires_at is None:
+        raise HTTPException(status_code=410, detail="This download link has already been used or expired — go back and click Download again for a fresh one.")
+    if expires_at <= _now().timestamp():
+        raise HTTPException(status_code=410, detail="This download link expired — go back and click Download again for a fresh one.")
+
+    if INSTALLER_DOWNLOAD_URL:
+        return RedirectResponse(INSTALLER_DOWNLOAD_URL, status_code=302)
+
+    if not os.path.exists(INSTALLER_FILE_PATH):
+        raise HTTPException(status_code=503, detail="The installer isn't available right now — try again shortly.")
+    return FileResponse(INSTALLER_FILE_PATH, filename=INSTALLER_FILENAME, media_type="application/octet-stream")
+
+
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 
 
