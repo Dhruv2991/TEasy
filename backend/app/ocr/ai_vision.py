@@ -1,11 +1,13 @@
 """
 Picks between groq_vision.py and gemini_vision.py based on the
-"ai_provider" setting, so the rest of the app (documents.py) only ever
-imports from here and never has to know which provider is active.
+"ai_provider" setting, so the rest of the app (documents.py,
+extraction/bill_excel_parser.py) only ever imports from here and never
+has to know which provider is active.
 
 Both underlying modules expose the identical interface:
     extract_bill_with_ai(image_path, prompt=...) -> dict
     extract_purchase_bill_with_ai(image_path) -> dict
+    map_excel_headers(grid) -> dict
     _current_key() -> str
 
 Switching providers is a Settings-page change (or AI_PROVIDER env var),
@@ -40,3 +42,17 @@ def extract_bill_with_ai(image_path: str, prompt: str = None) -> dict:
 
 def extract_purchase_bill_with_ai(image_path: str) -> dict:
     return _active_provider().extract_purchase_bill_with_ai(image_path)
+
+
+def map_excel_headers(grid: list[list]) -> dict:
+    """
+    Text-only fallback used by bill_excel_parser.py when its deterministic
+    header-alias matching can't confidently identify a spreadsheet's
+    columns. `grid` is a small 2D slice from the top of the sheet (raw
+    cell values, no formatting) — see groq_vision.map_excel_headers for the
+    exact response shape. Raises RuntimeError if no key is configured for
+    the active provider or the call fails, same as the other functions
+    here, so callers can catch it and fall back to the existing "couldn't
+    find a recognizable bill table" error.
+    """
+    return _active_provider().map_excel_headers(grid)

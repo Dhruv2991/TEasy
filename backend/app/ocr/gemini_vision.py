@@ -5,8 +5,9 @@ asks it to return the same structured accounting fields as groq_vision.py.
 This is a drop-in alternative to groq_vision.py, not a replacement for it —
 switch between them via Settings ("AI provider": Groq or Gemini) without
 touching any calling code, since both modules expose the identical
-extract_bill_with_ai / extract_purchase_bill_with_ai interface and share
-the same prompts (imported from groq_vision.py, not duplicated).
+extract_bill_with_ai / extract_purchase_bill_with_ai / map_excel_headers
+interface and share the same prompts (imported from groq_vision.py, not
+duplicated).
 
 Get a free key at https://aistudio.google.com/apikey — no credit card
 required. Free tier limits (subject to change on Google's side): roughly
@@ -24,7 +25,10 @@ from ..settings import get_settings
 from .groq_vision import (
     SALES_EXTRACTION_PROMPT,
     PURCHASE_EXTRACTION_PROMPT,
+    HEADER_MAP_CANONICAL_FIELDS,
+    HEADER_MAP_PROMPT_TEMPLATE,
     _encode_image,
+    _grid_to_text,
 )
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -49,6 +53,50 @@ def _extract_json(text: str) -> dict:
         if match:
             cleaned = match.group(0)
     return json.loads(cleaned)
+
+
+def _post_text_only(prompt: str, max_tokens: int = 1500) -> str:
+    """Shared plumbing for a plain text-in/text-out Gemini call (used by
+    map_excel_headers) — no inline_data/image part, unlike the bill-photo
+    calls below."""
+    api_key = _current_key()
+    if not api_key:
+        raise RuntimeError(
+            "Gemini API key is not set. Get a free key at "
+            "https://aistudio.google.com/apikey and add it on the Settings page in the app."
+        )
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": max_tokens},
+    }
+    url = f"{GEMINI_API_BASE}/{_current_model()}:generateContent"
+    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+
+    max_retries = 3
+    for attempt in range(max_retries + 1):
+        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        if resp.status_code == 429:
+            wait_s = 5.5
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    wait_s = float(retry_after) + 0.5
+                except ValueError:
+                    pass
+            if attempt < max_retries:
+                time.sleep(wait_s)
+                continue
+        if resp.status_code != 200:
+            raise RuntimeError(f"Gemini API error {resp.status_code}: {resp.text[:500]}")
+        break
+
+    body = resp.json()
+    try:
+        return body["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError) as e:
+        finish_reason = body.get("candidates", [{}])[0].get("finishReason", "unknown")
+        raise RuntimeError(f"Gemini returned no usable response (finishReason={finish_reason}): {e}")
 
 
 def extract_bill_with_ai(image_path: str, prompt: str = SALES_EXTRACTION_PROMPT) -> dict:
@@ -150,3 +198,16 @@ def extract_bill_with_ai(image_path: str, prompt: str = SALES_EXTRACTION_PROMPT)
 def extract_purchase_bill_with_ai(image_path: str) -> dict:
     """Same as extract_bill_with_ai, but with the Purchase-bill prompt."""
     return extract_bill_with_ai(image_path, prompt=PURCHASE_EXTRACTION_PROMPT)
+
+
+def map_excel_headers(grid: list[list]) -> dict:
+    """Gemini counterpart to groq_vision.map_excel_headers — identical
+    prompt/contract, text-only (no image part)."""
+    prompt = HEADER_MAP_PROMPT_TEMPLATE.format(
+        fields=HEADER_MAP_CANONICAL_FIELDS, grid=_grid_to_text(grid)
+    )
+    content = _post_text_only(prompt, max_tokens=1200)
+    try:
+        return _extract_json(content)
+    except (json.JSONDecodeError, KeyError, IndexError) as e:
+        raise RuntimeError(f"Could not parse Gemini header-mapping response as JSON: {e}. Raw: {content[:300]}")

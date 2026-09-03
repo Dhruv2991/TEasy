@@ -311,3 +311,133 @@ def extract_purchase_bill_with_ai(image_path: str) -> dict:
     than handwritten sales bill-book forms).
     """
     return extract_bill_with_ai(image_path, prompt=PURCHASE_EXTRACTION_PROMPT)
+
+
+# --- Excel header mapping (text-only, no image) --------------------------
+# Fallback used by bill_excel_parser.py when its deterministic header-alias
+# matching can't confidently identify the columns in a user's spreadsheet
+# (an unfamiliar supplier/bank export, an unusual layout, etc). Rather than
+# growing an ever-longer hardcoded alias list for every new header spelling
+# anyone might use, this sends the header row (plus a couple of sample data
+# rows for context) to the same LLM already wired up for bill photos, and
+# asks it to map columns to TEasy's canonical field names once. Everything
+# downstream of that mapping (consolidation, rate-breakdown merging, item
+# handling) is unchanged deterministic code — the model's only job is
+# figuring out "which column is which", not touching any numbers itself.
+
+HEADER_MAP_CANONICAL_FIELDS = """
+- party: the customer (Sales) or supplier (Purchase) ledger/name column
+- date: the invoice/voucher date column
+- invoice_number: the invoice/bill/voucher number column
+- amount: a per-line taxable value / amount column (before tax) — only set this if there is a SINGLE flat amount column; leave it null if the sheet instead uses several per-GST-rate columns (see rate_buckets below)
+- gst_rate: an explicit GST-rate percentage column, if present as its own column
+- cgst_amount / sgst_amount / igst_amount: single flat tax-amount columns, only if NOT split per rate-slab (see rate_buckets below)
+- total_value: the invoice grand total (tax-inclusive) column
+- stock_item: an item/product/stock-item name column, if this is an item-wise sheet
+- quantity: item quantity column
+- rate: item unit price/rate column
+- unit: item unit-of-measure column (Nos, Kg, ...)
+- hsn: HSN/SAC code column
+- round_off: a rounding-adjustment column
+- vch_type: a voucher-type column (Sales/Purchase/Credit Note/...), if present
+"""
+
+
+def _grid_to_text(grid: list[list]) -> str:
+    lines = []
+    for r_idx, row in enumerate(grid):
+        cells = " | ".join(
+            f"col{c_idx + 1}={'' if v is None else str(v)}" for c_idx, v in enumerate(row)
+        )
+        lines.append(f"row{r_idx + 1}: {cells}")
+    return "\n".join(lines)
+
+
+HEADER_MAP_PROMPT_TEMPLATE = """You are helping an accounting import tool understand an unfamiliar Excel/CSV layout (a sales, purchase, or bank-statement register exported from some accounting system, or typed by hand). Column headers can be worded in many ways ("Party Ledger" vs "Customer Name" vs "Party", "Vch No." vs "Invoice Number" vs "Bill No#", etc.) — your job is to map each column to ONE canonical field name, based on the header text and the sample data underneath it.
+
+Canonical field names available:
+{fields}
+
+Some sheets put GST amounts in flat columns (cgst_amount/sgst_amount/igst_amount + one amount column). Others put them in a WIDE layout with a separate set of columns per GST rate slab (e.g. "TAXABLE @5%", "CGST @2.5%", "SGST @2.5%", "TAXABLE @18%", "CGST @9%", "SGST @9%", or "IGST 12%"/"CGST 6%"/"SGST 6%"). If you see this wide pattern, do NOT map those into the flat amount/cgst_amount/etc fields — instead list them under "rate_buckets", one entry per GST rate slab, each with its own value/cgst/sgst/igst column numbers (omit any that don't exist for that slab).
+
+Here is the sheet — each row shows every column's 1-based column number and its value for the first several rows (the first row(s) are likely the header, or there may be a couple of blank/title rows above the real header — figure out which row number is the actual header row):
+
+{grid}
+
+Return ONLY this JSON object, nothing else:
+{{
+  "header_row": <1-based row number of the actual column-header row>,
+  "field_columns": {{"party": <col number or null>, "date": <col number or null>, "invoice_number": <col number or null>, "amount": <col number or null>, "gst_rate": <col number or null>, "cgst_amount": <col number or null>, "sgst_amount": <col number or null>, "igst_amount": <col number or null>, "total_value": <col number or null>, "stock_item": <col number or null>, "quantity": <col number or null>, "rate": <col number or null>, "unit": <col number or null>, "hsn": <col number or null>, "round_off": <col number or null>, "vch_type": <col number or null>}},
+  "rate_buckets": [{{"rate": <number>, "value_col": <col number or null>, "cgst_col": <col number or null>, "sgst_col": <col number or null>, "igst_col": <col number or null>}}],
+  "confidence": <0 to 1>,
+  "notes": "anything ambiguous about this mapping"
+}}
+
+Rules:
+- Only map a column if you're reasonably confident from its header text and/or sample values — leave it null rather than guessing.
+- A column can only be used once across field_columns and rate_buckets combined.
+- amount MUST be null if rate_buckets is non-empty, and vice versa — don't double-map the same money into both.
+- Do not invent columns that don't exist in the sheet.
+"""
+
+
+def map_excel_headers(grid: list[list]) -> dict:
+    """
+    grid: a small 2D list (list of rows, each a list of cell values) taken
+    from the top of the sheet — header row candidates plus a few data rows
+    for context. Column numbering in the response is 1-based to match how
+    bill_excel_parser.py already indexes columns.
+
+    Returns the parsed JSON dict described in HEADER_MAP_PROMPT_TEMPLATE.
+    Raises RuntimeError on missing key / API failure, same contract as
+    extract_bill_with_ai, so callers can fall back to a clear error.
+    """
+    api_key = _current_key()
+    if not api_key:
+        raise RuntimeError(
+            "Groq API key is not set. Get a free key at https://console.groq.com/keys "
+            "and add it on the Settings page in the app."
+        )
+
+    prompt = HEADER_MAP_PROMPT_TEMPLATE.format(
+        fields=HEADER_MAP_CANONICAL_FIELDS, grid=_grid_to_text(grid)
+    )
+
+    payload = {
+        "model": _current_model(),
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "reasoning_effort": "none",
+        "max_tokens": 1200,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    max_retries = 3
+    for attempt in range(max_retries + 1):
+        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=60)
+        if resp.status_code == 429:
+            wait_s = None
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    wait_s = float(retry_after)
+                except ValueError:
+                    pass
+            wait_s = (wait_s or 5) + 0.5
+            if attempt < max_retries:
+                time.sleep(wait_s)
+                continue
+        if resp.status_code != 200:
+            raise RuntimeError(f"Groq API error {resp.status_code}: {resp.text[:500]}")
+        break
+
+    body = resp.json()
+    content = body["choices"][0]["message"]["content"]
+    try:
+        parsed = _extract_json(content)
+    except (json.JSONDecodeError, KeyError, IndexError) as e:
+        raise RuntimeError(f"Could not parse Groq header-mapping response as JSON: {e}. Raw: {content[:300]}")
+    return parsed

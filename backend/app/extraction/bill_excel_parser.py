@@ -391,23 +391,17 @@ def _looks_like_item_template(sheet) -> bool:
     return _find_item_template_header_row(sheet) is not None
 
 
-def _parse_item_template_excel(sheet) -> list[ParsedBillRow]:
-    header_row, cols = _find_item_template_header_row(sheet)
-
+def _extract_item_rows(sheet, header_row: int, cols: dict, rate_buckets: list) -> list[ParsedBillRow]:
+    """
+    Shared row-extraction core for the item-wise template path, used both
+    by the deterministic header match (_parse_item_template_excel) and by
+    the AI header-mapping fallback (_parse_via_ai_mapping) below — both
+    just need to produce a (header_row, cols, rate_buckets) triple and
+    this function turns that into ParsedBillRow objects the same way.
+    """
     rate_cols = {}
     for col in range(1, sheet.max_column + 1):
         rate_cols[_normalize(sheet.cell(header_row, col).value)] = col
-
-    # Some exports (e.g. Tally's own item-wise register export) repeat a
-    # "TAXABLE @n%" / "CGST @n%" / ... column per GST slab instead of a
-    # single flat Amount column — the same wide-bucket layout the generic
-    # (non-item) parser already understands via _find_rate_buckets. When
-    # that pattern is present alongside the item-template's Stock Item
-    # column, prefer the per-row bucket that actually has a value so both
-    # the rate/tax AND the stock item survive together instead of only
-    # the first bucket column being read (which silently dropped every
-    # other rate slab's amount).
-    rate_buckets = _find_rate_buckets(sheet, header_row)
 
     def get(row, name):
         col = cols.get(name)
@@ -467,10 +461,24 @@ def _parse_item_template_excel(sheet) -> list[ParsedBillRow]:
                     rate = slab_rate
                     break
 
+        # Flat single-column CGST/SGST/IGST (as opposed to per-slab bucket
+        # or fixed-slab columns above) — only relevant for the AI-mapped
+        # path, since the deterministic item-template header set doesn't
+        # define these keys, so `cols.get(...)` is simply None there and
+        # this is a no-op.
+        if cgst == 0.0 and sgst == 0.0 and igst == 0.0:
+            flat_cgst = _number(get(row, "cgst_amount")) or 0.0
+            flat_sgst = _number(get(row, "sgst_amount")) or 0.0
+            flat_igst = _number(get(row, "igst_amount")) or 0.0
+            if flat_cgst or flat_sgst or flat_igst:
+                cgst, sgst, igst = round(flat_cgst, 2), round(flat_sgst, 2), round(flat_igst, 2)
+
         if rate == 0.0:
             explicit_rate = _sanitize_gst_rate(get(row, "gst_rate"))
             if explicit_rate:
                 rate = explicit_rate
+            elif amount:
+                rate = _closest_rate(((cgst + sgst + igst) / amount) * 100)
 
         round_off = _number(get(row, "round_off")) or 0.0
         line_total = round(amount + cgst + sgst + igst + round_off, 2)
@@ -499,20 +507,101 @@ def _parse_item_template_excel(sheet) -> list[ParsedBillRow]:
             items=item_line, vch_type=vch_type_val,
         ))
 
+    return raw_rows
+
+
+def _parse_item_template_excel(sheet) -> list[ParsedBillRow]:
+    header_row, cols = _find_item_template_header_row(sheet)
+
+    # Some exports (e.g. Tally's own item-wise register export) repeat a
+    # "TAXABLE @n%" / "CGST @n%" / ... column per GST slab instead of a
+    # single flat Amount column — the same wide-bucket layout the generic
+    # (non-item) parser already understands via _find_rate_buckets. When
+    # that pattern is present alongside the item-template's Stock Item
+    # column, prefer the per-row bucket that actually has a value so both
+    # the rate/tax AND the stock item survive together instead of only
+    # the first bucket column being read (which silently dropped every
+    # other rate slab's amount).
+    rate_buckets = _find_rate_buckets(sheet, header_row)
+
+    raw_rows = _extract_item_rows(sheet, header_row, cols, rate_buckets)
     if not raw_rows:
         raise ValueError("Found the Tally voucher template header but no item/bill rows under it.")
-
     return _consolidate_invoice_rows(raw_rows)
+
+
+# --- AI header-mapping fallback -------------------------------------------
+# When neither the generic parser nor the item-template parser above can
+# confidently find a recognizable table (an unfamiliar export format, an
+# unusual header wording, a bank statement with its own layout, ...), fall
+# back to asking the configured vision/language model to map the columns
+# once — see ocr/ai_vision.py:map_excel_headers. Everything downstream
+# (consolidation, rate-breakdown merging, item handling) reuses the exact
+# same deterministic _extract_item_rows() used above; the model's only job
+# is figuring out which column is which, never touching a number itself.
+
+_AI_MAPPING_SAMPLE_ROWS = 12  # header candidates + a few data rows for context
+
+
+def _sheet_to_grid(sheet, max_rows: int) -> list[list]:
+    return [
+        [sheet.cell(r, c).value for c in range(1, sheet.max_column + 1)]
+        for r in range(1, min(sheet.max_row, max_rows) + 1)
+    ]
+
+
+def _parse_via_ai_mapping(sheet) -> list[ParsedBillRow] | None:
+    from ..ocr.ai_vision import has_ai_key, map_excel_headers
+
+    if not has_ai_key():
+        return None
+
+    grid = _sheet_to_grid(sheet, _AI_MAPPING_SAMPLE_ROWS)
+    try:
+        mapping = map_excel_headers(grid)
+    except Exception:
+        # Network/API failure — fall through to the normal "couldn't find
+        # a recognizable bill table" error rather than a confusing
+        # AI-specific traceback for what is, from the user's side, just
+        # an unrecognized file.
+        return None
+
+    header_row = mapping.get("header_row")
+    field_columns = mapping.get("field_columns") or {}
+    rate_buckets = mapping.get("rate_buckets") or []
+    if not header_row or not (field_columns.get("invoice_number") and field_columns.get("party")):
+        return None
+
+    cols = {k: v for k, v in field_columns.items() if v}
+    raw_rows = _extract_item_rows(sheet, int(header_row), cols, rate_buckets)
+    if not raw_rows:
+        return None
+
+    consolidated = _consolidate_invoice_rows(raw_rows)
+    note = mapping.get("notes")
+    if note:
+        for row in consolidated:
+            row.warnings.append(f"Columns identified automatically by AI — please double check: {note}")
+    return consolidated
 
 
 def parse_bill_excel(file_path: str) -> list[ParsedBillRow]:
     sheet = _load_first_sheet(file_path)
 
     if _looks_like_item_template(sheet):
-        return _parse_item_template_excel(sheet)
+        try:
+            return _parse_item_template_excel(sheet)
+        except ValueError:
+            ai_result = _parse_via_ai_mapping(sheet)
+            if ai_result:
+                return ai_result
+            raise
 
     header = _find_header_row(sheet)
     if not header:
+        ai_result = _parse_via_ai_mapping(sheet)
+        if ai_result:
+            return ai_result
         raise ValueError(
             "Could not find a recognizable bill table in this Excel — need at least a party/date "
             "column plus a taxable or total amount column."
