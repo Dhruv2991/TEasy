@@ -160,6 +160,17 @@ def _stock_item_exists(stock_items: list[dict], name: str) -> bool:
     return any(si["name"].strip().lower() == name_lower for si in stock_items)
 
 
+def _create_unit_master_xml(unit_name: str) -> str:
+    """Creates unit of measure master XML in Tally."""
+    return f"""
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <UNIT NAME="{xml_escape(unit_name)}" ACTION="Create">
+            <NAME>{xml_escape(unit_name)}</NAME>
+            <ISSIMPLEUNIT>Yes</ISSIMPLEUNIT>
+          </UNIT>
+        </TALLYMESSAGE>"""
+
+
 def _create_stock_item_master_xml(name: str, unit: str | None) -> str:
     unit = unit or "Nos"
     return f"""
@@ -224,6 +235,41 @@ def _ledger_entry(name: str, amount: float, is_deemed_positive: bool, rate_pct: 
           <ISDEEMEDPOSITIVE>{dp_str}</ISDEEMEDPOSITIVE>
           <AMOUNT>{amt_val:.2f}</AMOUNT>{rate_tag}
         </ALLLEDGERENTRIES.LIST>"""
+
+
+def _invoice_ledger_entry(name: str, amount: float, is_deemed_positive: bool, rate_pct: float | None = None, is_party: bool = False) -> str:
+    """Same as _ledger_entry, but for vouchers using
+    PERSISTEDVIEW="Invoice Voucher View" (i.e. build_item_voucher_xml's
+    item/inventory vouchers). Tally's XML schema uses a DIFFERENT tag for
+    the non-inventory ledger lines depending on voucher view:
+    <ALLLEDGERENTRIES.LIST> for "Accounting Voucher View" (plain
+    build_voucher_xml, which is why that path works), and
+    <LEDGERENTRIES.LIST> (no "ALL" prefix) for "Invoice Voucher View".
+    Sending the wrong tag doesn't error — Tally silently drops those
+    lines from the imported voucher, which is exactly what caused a
+    voucher with correct inventory items but with the party/CGST/SGST/
+    round-off entries missing entirely, leaving the voucher unbalanced
+    and stuck in Tally's Import Exceptions with no Debit side at all.
+    The party line also needs <ISPARTYLEDGER>Yes</ISPARTYLEDGER> in this
+    view for Tally to recognize which ledger is the invoice's party.
+    """
+    amt_val = -abs(amount) if is_deemed_positive else abs(amount)
+    dp_str = "Yes" if is_deemed_positive else "No"
+
+    if rate_pct and rate_pct > 0:
+        clean_rate = int(rate_pct) if rate_pct == int(rate_pct) else round(rate_pct, 2)
+        rate_tag = f"\n          <RATE>{clean_rate} %</RATE>"
+    else:
+        rate_tag = ""
+
+    party_tag = "\n          <ISPARTYLEDGER>Yes</ISPARTYLEDGER>" if is_party else ""
+
+    return f"""
+        <LEDGERENTRIES.LIST>
+          <LEDGERNAME>{xml_escape(name)}</LEDGERNAME>
+          <ISDEEMEDPOSITIVE>{dp_str}</ISDEEMEDPOSITIVE>{party_tag}
+          <AMOUNT>{amt_val:.2f}</AMOUNT>{rate_tag}
+        </LEDGERENTRIES.LIST>"""
 
 
 def build_voucher_xml(vch_type_str: str, tx: dict, config: dict, ledgers: list[dict] | None = None) -> str:
@@ -389,7 +435,7 @@ def build_item_voucher_xml(
             if not _ledger_exists(ledgers, names["main"]):
                 masters.append(_create_ledger_master_xml(names["main"], main_group))
 
-    entries = [_ledger_entry(party, total, is_deemed_positive=party_dp)]
+    entries = [_invoice_ledger_entry(party, total, is_deemed_positive=party_dp, is_party=True)]
 
     calculated = 0.0
     for item in items:
@@ -443,13 +489,13 @@ def build_item_voucher_xml(
             masters.append(_create_ledger_master_xml(names["igst"], "Duties & Taxes", "Integrated Tax"))
 
         if part_cgst:
-            entries.append(_ledger_entry(names["cgst"], part_cgst, is_deemed_positive=main_dp, rate_pct=part_half_rate))
+            entries.append(_invoice_ledger_entry(names["cgst"], part_cgst, is_deemed_positive=main_dp, rate_pct=part_half_rate))
             calculated += part_cgst
         if part_sgst:
-            entries.append(_ledger_entry(names["sgst"], part_sgst, is_deemed_positive=main_dp, rate_pct=part_half_rate))
+            entries.append(_invoice_ledger_entry(names["sgst"], part_sgst, is_deemed_positive=main_dp, rate_pct=part_half_rate))
             calculated += part_sgst
         if part_igst:
-            entries.append(_ledger_entry(names["igst"], part_igst, is_deemed_positive=main_dp, rate_pct=part_rate))
+            entries.append(_invoice_ledger_entry(names["igst"], part_igst, is_deemed_positive=main_dp, rate_pct=part_rate))
             calculated += part_igst
 
     diff = round(total - calculated, 2)
@@ -460,7 +506,7 @@ def build_item_voucher_xml(
             round_off_dp = (diff > 0)
         else:             # Sales / Debit Note
             round_off_dp = (diff < 0)
-        entries.append(_ledger_entry(round_off_ledger, abs(diff), is_deemed_positive=round_off_dp))
+        entries.append(_invoice_ledger_entry(round_off_ledger, abs(diff), is_deemed_positive=round_off_dp))
 
     vch_no_tag = f"<VOUCHERNUMBER>{xml_escape(invoice_number)}</VOUCHERNUMBER>" if invoice_number else ""
 
@@ -569,10 +615,64 @@ def build_voucher_envelope(tx: dict, config: dict) -> str:
 
     if tx.get("items"):
         try:
-            from .tally_client import fetch_stock_items
+            from .tally_client import fetch_stock_items, send_voucher_xml
             stock_items = fetch_stock_items()
+            if not stock_items:
+                stock_items = fetch_stock_items(force_refresh=True)
         except Exception:
             stock_items = []
+            send_voucher_xml = None
+
+        # Tally quirk: creating a brand-new STOCKITEM (and/or its UNIT)
+        # master in the *same* XML request as a VOUCHER that immediately
+        # references it is unreliable — the voucher's inventory line can
+        # get validated before the master is fully committed, failing
+        # with "Stock Item '...' does not exist!" even though the master
+        # creation itself reported no error. Ledgers don't have this
+        # problem (Tally commits those synchronously within one request),
+        # so only stock items/units need this two-step treatment.
+        # Fix: create any missing unit/stock-item masters in their own
+        # request FIRST, confirm Tally accepted them, then build the
+        # voucher itself referencing masters that are now guaranteed to
+        # already exist.
+        items = tx.get("items") or []
+        missing_units = []
+        missing_stock_items = []
+        seen_units, seen_names = set(), set()
+        for item in items:
+            name = item.get("name") or "Unnamed Item"
+            unit = item.get("unit") or "Nos"
+            if unit not in seen_units:
+                seen_units.add(unit)
+                missing_units.append(unit)
+            if name not in seen_names:
+                seen_names.add(name)
+                if not _stock_item_exists(stock_items, name):
+                    missing_stock_items.append(item)
+
+        if send_voucher_xml is not None and (missing_units or missing_stock_items):
+            preflight_masters = []
+            for unit in missing_units:
+                preflight_masters.append(_create_unit_master_xml(unit))
+            for item in missing_stock_items:
+                preflight_masters.append(_create_stock_item_master_xml(item.get("name") or "Unnamed Item", item.get("unit")))
+            preflight_xml = wrap_envelope("".join(preflight_masters), config["company_name"])
+            try:
+                preflight_result = send_voucher_xml(preflight_xml)
+                if preflight_result.get("errors", 0) == 0:
+                    # Success — these now exist in Tally, so treat them as
+                    # already-present for the voucher build below and skip
+                    # re-declaring them there too.
+                    stock_items = list(stock_items) + [
+                        {"name": item.get("name") or "Unnamed Item", "base_unit": item.get("unit") or "Nos"}
+                        for item in missing_stock_items
+                    ]
+            except Exception:
+                # Pre-flight push failed outright (e.g. connection hiccup) —
+                # fall through to the old single-request behavior below as
+                # a best-effort fallback rather than blocking the push.
+                pass
+
         message = build_item_voucher_xml(vch_type, tx, config, ledgers, stock_items)
     else:
         message = build_voucher_xml(vch_type, tx, config, ledgers)
