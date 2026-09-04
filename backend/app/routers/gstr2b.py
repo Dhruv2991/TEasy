@@ -1,6 +1,7 @@
 import os
 import shutil
 import uuid
+import json
 from datetime import datetime
 
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
@@ -412,15 +413,14 @@ def upload_gstr2b_purchase(file: UploadFile = File(...), db: Session = Depends(g
 def upload_sales_excel(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Import Sales invoices from the business's own sales register Excel.
 
-    Unlike purchases, there's no government file for outward supplies before
-    filing — this reads a plain sales sheet (Party, Invoice No, Date,
-    Taxable Value, GST, Total). Existing photo-based sales entry is
-    untouched; this is an additional bulk-import path.
+    Uses the itemized bill parser to extract individual line items, amounts,
+    and tax rates for accurate Tally voucher creation.
     """
     if not file.filename.lower().endswith((".xlsx", ".xls")):
         raise HTTPException(400, "Please upload an .xlsx/.xls sales register file.")
 
-    from ..gstr2b.sales_parser import parse_sales_excel
+    # 1. Point to your fixed parser with itemized support
+    from ..extraction.bill_excel_parser import parse_bill_excel # adjust import path if located elsewhere
 
     ext = os.path.splitext(file.filename)[1] or ".xlsx"
     saved_name = f"{uuid.uuid4().hex}{ext}"
@@ -442,7 +442,8 @@ def upload_sales_excel(file: UploadFile = File(...), db: Session = Depends(get_d
     _log(db, f"Sales register Excel '{file.filename}' uploaded", document_id=doc.id)
 
     try:
-        rows = parse_sales_excel(saved_path)
+        # 2. Parse file using the item-wise bill excel parser
+        rows = parse_bill_excel(saved_path)
     except ValueError as e:
         doc.status = "FAILED"
         db.commit()
@@ -467,39 +468,53 @@ def upload_sales_excel(file: UploadFile = File(...), db: Session = Depends(get_d
         db.commit()
         db.refresh(bill)
 
+        # Handle both dict and object structures returned by parser
+        get_val = lambda k, default=None: row.get(k, default) if isinstance(row, dict) else getattr(row, k, default)
+
+        items_data = get_val("items", [])
+        rate_breakdown_data = get_val("rate_breakdown", [])
+
         tx = models.Transaction(
             company_id=doc.company_id,
             bill_id=bill.id,
             type="SALES",
-            party=row.party,
-            date=row.invoice_date,
-            invoice_number=row.invoice_number,
-            taxable_value=row.taxable_value,
-            gst_rate=row.gst_rate,
-            cgst=row.cgst,
-            sgst=row.sgst,
-            igst=row.igst,
-            cess=row.cess,
-            total_value=row.total_value,
+            party=get_val("party") or get_val("supplier_name"),
+            date=get_val("invoice_date") or get_val("date"),
+            invoice_number=get_val("invoice_number"),
+            taxable_value=get_val("taxable_value", 0.0),
+            gst_rate=get_val("gst_rate", 0.0),
+            cgst=get_val("cgst", 0.0),
+            sgst=get_val("sgst", 0.0),
+            igst=get_val("igst", 0.0),
+            cess=get_val("cess", 0.0),
+            total_value=get_val("total_value", 0.0),
             confidence=1.0,
             status="NEEDS_REVIEW",
+            # 3. Store itemized array and rate breakdown for Tally voucher generation
+            items=json.dumps(items_data) if items_data and hasattr(models.Transaction, "items") else None,
+            rate_breakdown=json.dumps(rate_breakdown_data) if rate_breakdown_data and hasattr(models.Transaction, "rate_breakdown") else None,
         )
         db.add(tx)
         db.commit()
         db.refresh(tx)
 
-        batch_key = ("SALES", row.party, row.invoice_number, round(row.taxable_value, 0))
-        in_batch_dupe = row.invoice_number and batch_key in seen_in_batch
-        in_db_dupe = _is_duplicate_invoice(db, "SALES", row.party, row.invoice_number, exclude_tx_id=tx.id, taxable_value=row.taxable_value)
+        party_name = get_val("party") or get_val("supplier_name")
+        inv_num = get_val("invoice_number")
+        taxable_val = get_val("taxable_value", 0.0)
+
+        batch_key = ("SALES", party_name, inv_num, round(taxable_val, 0))
+        in_batch_dupe = inv_num and batch_key in seen_in_batch
+        in_db_dupe = _is_duplicate_invoice(db, "SALES", party_name, inv_num, exclude_tx_id=tx.id, taxable_value=taxable_val)
         tx.possible_duplicate = bool(in_batch_dupe or in_db_dupe)
-        if row.invoice_number:
+        if inv_num:
             seen_in_batch.add(batch_key)
         db.commit()
         db.refresh(tx)
 
-        note = f"Sales {idx + 1} ({row.source_sheet}): invoice {row.invoice_number} for {row.party}, total={row.total_value}"
-        if row.warnings:
-            note += f" | warnings: {', '.join(row.warnings)}"
+        warnings = get_val("warnings", [])
+        note = f"Sales {idx + 1}: invoice {inv_num} for {party_name}, total={get_val('total_value')}, items={len(items_data)}"
+        if warnings:
+            note += f" | warnings: {', '.join(warnings)}"
         if tx.possible_duplicate:
             note += " | ⚠ possible duplicate — same party + invoice number already seen"
         _log(db, note, document_id=doc.id, transaction_id=tx.id)

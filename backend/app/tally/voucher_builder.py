@@ -59,6 +59,13 @@ def _ledger_exists(ledgers: list[dict], name: str) -> bool:
     return any(led["name"].strip().lower() == name_lower for led in ledgers)
 
 
+_BUILTIN_LEDGER_NAMES = {"cash", "profit & loss a/c", "profit and loss a/c"}
+
+
+def _should_skip_master_creation(name: str) -> bool:
+    return bool(name) and name.strip().lower() in _BUILTIN_LEDGER_NAMES
+
+
 def _resolve_ledger_names(vch_type: str, rate: float, config: dict, ledgers: list[dict]) -> dict:
     def _clean(r: float):
         return int(r) if r == int(r) else round(r, 2)
@@ -259,7 +266,7 @@ def build_voucher_xml(vch_type_str: str, tx: dict, config: dict, ledgers: list[d
 
     masters = []
     entries = [_ledger_entry(party, total, is_deemed_positive=party_dp)]
-    if ledgers and not _ledger_exists(ledgers, party):
+    if ledgers and not _ledger_exists(ledgers, party) and not _should_skip_master_creation(party):
         masters.append(_create_ledger_master_xml(party, parent_group))
 
     for part in breakdown:
@@ -368,7 +375,7 @@ def build_item_voucher_xml(
     round_off_ledger = config.get("round_off_ledger") or "ROUNDOFF"
 
     masters = []
-    if not _ledger_exists(ledgers, party):
+    if not _ledger_exists(ledgers, party) and not _should_skip_master_creation(party):
         masters.append(_create_ledger_master_xml(party, parent_group))
 
     # One resolved sales/purchase ledger name per GST rate present, so each
@@ -532,6 +539,17 @@ def build_voucher_envelope(tx: dict, config: dict) -> str:
     try:
         from .tally_client import fetch_ledgers
         ledgers = fetch_ledgers()
+        if not ledgers:
+            # fetch_ledgers() returning a genuinely empty list is
+            # indistinguishable here from "the fetch silently failed" —
+            # and treating an empty result as "nothing exists yet" is
+            # dangerous: it makes the code below try to re-Create common
+            # built-in ledgers (Cash, etc.) that almost certainly already
+            # exist in any real Tally company, which Tally then reports
+            # as an unexpected ALTER (wrong parent group) instead of the
+            # voucher itself being created. Force one uncached retry
+            # before accepting an empty list as real.
+            ledgers = fetch_ledgers(force_refresh=True)
     except Exception:
         ledgers = []
 

@@ -207,7 +207,10 @@ def push_approved_transactions(
         if errors > 0 or created == 0:
             tx.tally_status = "FAILED"
             if altered > 0:
-                err_msg = f"Bill already exists in Tally (Invoice #{tx.invoice_number} already recorded)."
+                err_msg = (
+                    f"Bill already exists in Tally (Invoice #{tx.invoice_number} already recorded). "
+                    f"Raw Tally response: {result.get('raw_response', '')[:800]}"
+                )
             else:
                 err_msg = result.get("error_message") or "Bill already exists in Tally or could not be created."
             tx.tally_error = err_msg
@@ -292,7 +295,10 @@ def push_single_transaction(transaction_id: int, db: Session = Depends(get_db)):
     if errors > 0 or created == 0:
         tx.tally_status = "FAILED"
         if altered > 0:
-            err_msg = f"Bill already exists in Tally (Invoice #{tx.invoice_number} already recorded)."
+            err_msg = (
+                f"Bill already exists in Tally (Invoice #{tx.invoice_number} already recorded). "
+                f"Raw Tally response: {result.get('raw_response', '')[:800]}"
+            )
         else:
             err_msg = result.get("error_message") or "Bill already exists in Tally or could not be created."
         tx.tally_error = err_msg
