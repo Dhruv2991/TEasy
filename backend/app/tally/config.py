@@ -1,10 +1,17 @@
 """
 Ledger name configuration for Tally voucher generation.
+
+Stored per-company: switching the active company (see settings.py's
+get_active_company_id) now switches which saved Tally Integration config
+(host/port/company name/ledger names) is in effect too, instead of every
+company sharing one global tally_config.json regardless of which one is
+selected.
 """
 
 import json
 import os
 from ..paths import get_data_dir
+from ..settings import get_active_company_id
 
 DEFAULT_CONFIG = {
     "company_name": "",
@@ -22,14 +29,29 @@ DEFAULT_CONFIG = {
 }
 
 
-def _config_path() -> str:
-    return os.path.join(get_data_dir(), "tally_config.json")
+def _config_path(company_id: int | None = None) -> str:
+    """
+    One config file per company (tally_config_<id>.json), so each
+    company's Tally host/port/company-name/ledger-name settings are
+    independent. `company_id=None` (or a fresh install with no companies
+    yet) falls back to the original single tally_config.json — this
+    covers pre-existing installs that only ever had one company, so their
+    saved settings aren't orphaned by this change; the first time that
+    install has more than one company and switches the active one, each
+    additional company simply starts from DEFAULT_CONFIG until its own
+    Tally Integration page is filled in and saved.
+    """
+    if company_id is None:
+        company_id = get_active_company_id()
+    if company_id is None:
+        return os.path.join(get_data_dir(), "tally_config.json")
+    return os.path.join(get_data_dir(), f"tally_config_{company_id}.json")
 
 
-def get_tally_config() -> dict:
-    path = _config_path()
+def get_tally_config(company_id: int | None = None) -> dict:
+    path = _config_path(company_id)
     if not os.path.exists(path):
-        save_tally_config(DEFAULT_CONFIG)
+        save_tally_config(DEFAULT_CONFIG, company_id=company_id)
         return dict(DEFAULT_CONFIG)
 
     try:
@@ -43,12 +65,13 @@ def get_tally_config() -> dict:
     return merged
 
 
-def save_tally_config(config: dict) -> dict:
+def save_tally_config(config: dict, company_id: int | None = None) -> dict:
     merged = dict(DEFAULT_CONFIG)
     merged.update(config)
 
-    os.makedirs(os.path.dirname(_config_path()), exist_ok=True)
-    with open(_config_path(), "w", encoding="utf-8") as f:
+    path = _config_path(company_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(merged, f, indent=2)
 
     return merged

@@ -85,8 +85,8 @@ function MatchPickerModal({ tx, onClose, onMatched }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-4 border-b border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-900">Match this bank entry</h3>
-          <p className="text-xs text-slate-500 mt-1">
+          <h3 className="text-[15.5px] font-semibold text-slate-900">Match this bank entry</h3>
+          <p className="text-[13px] text-slate-500 mt-1">
             Looking for a {lookingFor} worth ₹{formatMoney(amount)}
             {tx.date ? ` around ${tx.date}` : ""}. {tx.narration && (
               <span className="italic">"{tx.narration}"</span>
@@ -95,10 +95,10 @@ function MatchPickerModal({ tx, onClose, onMatched }) {
         </div>
 
         <div className="p-4 space-y-2">
-          {loading && <div className="text-sm text-slate-400 py-4 text-center">Loading candidates…</div>}
-          {error && <div className="text-sm text-rose-600">{error}</div>}
+          {loading && <div className="text-[15.5px] text-slate-400 py-4 text-center">Loading candidates…</div>}
+          {error && <div className="text-[15.5px] text-rose-600">{error}</div>}
           {!loading && !error && candidates.length === 0 && (
-            <div className="text-sm text-slate-400 py-4 text-center">
+            <div className="text-[15.5px] text-slate-400 py-4 text-center">
               No same-amount invoice found within the usual payment window. This bank entry may not
               correspond to a recorded sale/purchase at all (e.g. a bank charge, salary, GST payment,
               or owner's drawing) — that's fine, it can stay Unmatched.
@@ -112,14 +112,14 @@ function MatchPickerModal({ tx, onClose, onMatched }) {
               className="w-full text-left border border-slate-200 rounded-lg p-3 hover:bg-slate-50 disabled:opacity-50 transition-colors flex items-center justify-between gap-3"
             >
               <div>
-                <div className="text-sm font-medium text-slate-900">{c.party}</div>
-                <div className="text-xs text-slate-500">
+                <div className="text-[15.5px] font-medium text-slate-900">{c.party}</div>
+                <div className="text-[13px] text-slate-500">
                   {c.invoice_number || "No invoice #"} · {c.date || "No date"}
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-sm font-semibold text-slate-900">₹{formatMoney(c.total_value)}</div>
-                <div className="text-[10px] text-slate-400">
+                <div className="text-[15.5px] font-semibold text-slate-900">₹{formatMoney(c.total_value)}</div>
+                <div className="text-[11px] text-slate-400">
                   {busyId === c.id ? "Matching…" : "Select"}
                 </div>
               </div>
@@ -131,10 +131,54 @@ function MatchPickerModal({ tx, onClose, onMatched }) {
           <button
             onClick={onClose}
             disabled={busyId !== null}
-            className="text-xs font-medium border border-slate-300 px-3 py-1.5 rounded-lg hover:bg-slate-100"
+            className="text-[13px] font-medium border border-slate-300 px-3 py-1.5 rounded-lg hover:bg-slate-100"
           >
             Close
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Full-size view of a bill's source photo/crop, opened by clicking its
+// thumbnail in the table. Only ever opened for rows that actually have an
+// image (bill.crop_path) — Excel/GSTR-2B-sourced rows have no photo, so
+// their thumbnail slot isn't clickable at all (see TransactionRow below).
+function BillImageModal({ imageUrl, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 bg-slate-900/70 flex items-center justify-center z-50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-xl shadow-xl max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-3 border-b border-slate-100">
+          <h3 className="text-[15.5px] font-semibold text-slate-900">Bill image</h3>
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-700 text-xl leading-none px-1"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="overflow-auto p-3 bg-slate-50">
+          <img
+            src={imageUrl}
+            alt="Full bill"
+            className="max-w-full h-auto rounded-lg border border-slate-200 mx-auto"
+          />
         </div>
       </div>
     </div>
@@ -152,7 +196,7 @@ function ReconciliationCell({ tx, onChanged }) {
       {needsAttention && (
         <button
           onClick={() => setPickerOpen(true)}
-          className="text-[10px] font-medium text-indigo-600 hover:text-indigo-800 underline underline-offset-2"
+          className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800 underline underline-offset-2"
         >
           {status === "AMBIGUOUS" ? "Resolve" : "Match"}
         </button>
@@ -176,6 +220,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(tx || {});
   const [busy, setBusy] = useState(false);
+  const [imageOpen, setImageOpen] = useState(false);
 
   useEffect(() => {
     if (!editing) {
@@ -289,15 +334,28 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
       {/* Bill Crop */}
       <td className="p-3 align-top">
         {img ? (
-          <img
-            src={img}
-            alt="bill crop"
-            className="w-16 h-16 object-cover rounded-lg border border-slate-200"
-          />
+          <button
+            type="button"
+            onClick={() => setImageOpen(true)}
+            className="block rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            title="Click to view the full bill"
+          >
+            <img
+              src={img}
+              alt="bill crop"
+              className="w-24 h-16 object-cover rounded-lg border border-slate-200 hover:opacity-80 transition-opacity cursor-pointer"
+            />
+          </button>
         ) : (
-          <div className="w-16 h-16 rounded-lg border border-slate-200 flex items-center justify-center text-slate-300">
+          <div
+            className="w-24 h-16 rounded-lg border border-slate-200 flex items-center justify-center text-slate-300"
+            title="No source image for this row (e.g. imported from Excel/GSTR-2B)"
+          >
             <Icon.Documents width={20} height={20} />
           </div>
+        )}
+        {imageOpen && (
+          <BillImageModal imageUrl={img} onClose={() => setImageOpen(false)} />
         )}
       </td>
 
@@ -305,7 +363,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
         <>
           <td className="p-3">
             <input
-              className="border border-slate-300 rounded px-2 py-1 text-sm w-32"
+              className="border border-slate-300 rounded px-2 py-1 text-[15.5px] w-36"
               value={form.party || ""}
               onChange={(e) => setForm({ ...form, party: e.target.value })}
               placeholder={isBank ? "Counter-party ledger" : ""}
@@ -315,7 +373,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             {/* Calendar Date Picker Input */}
             <input
               type="date"
-              className="border border-slate-300 rounded px-2 py-1 text-sm w-36"
+              className="border border-slate-300 rounded px-2 py-1 text-[15.5px] w-40"
               value={toIsoDate(form.date)}
               onChange={(e) => setForm({ ...form, date: e.target.value })}
             />
@@ -323,7 +381,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
           <td className="p-3">
             <input
               type="text"
-              className="border border-slate-300 rounded px-2 py-1 text-sm w-24"
+              className="border border-slate-300 rounded px-2 py-1 text-[15.5px] w-28"
               value={(isBank ? form.invoice_number : form.invoice_number) || ""}
               onChange={(e) =>
                 setForm({ ...form, invoice_number: e.target.value })
@@ -335,19 +393,19 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             <td className="p-3">
               <div className="flex gap-2">
                 <div>
-                  <div className="text-[10px] text-slate-400 mb-0.5">Debit (₹)</div>
+                  <div className="text-[11px] text-slate-400 mb-0.5">Debit (₹)</div>
                   <input
                     type="number"
-                    className="border border-slate-300 rounded px-2 py-1 text-sm w-20"
+                    className="border border-slate-300 rounded px-2 py-1 text-[15.5px] w-24"
                     value={form.debit || 0}
                     onChange={(e) => handleDebitChange(e.target.value)}
                   />
                 </div>
                 <div>
-                  <div className="text-[10px] text-slate-400 mb-0.5">Credit (₹)</div>
+                  <div className="text-[11px] text-slate-400 mb-0.5">Credit (₹)</div>
                   <input
                     type="number"
-                    className="border border-slate-300 rounded px-2 py-1 text-sm w-20"
+                    className="border border-slate-300 rounded px-2 py-1 text-[15.5px] w-24"
                     value={form.credit || 0}
                     onChange={(e) => handleCreditChange(e.target.value)}
                   />
@@ -355,7 +413,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
               </div>
               <input
                 type="text"
-                className="mt-1.5 border border-slate-300 rounded px-2 py-1 text-xs w-full"
+                className="mt-1.5 border border-slate-300 rounded px-2 py-1 text-[13px] w-full"
                 value={form.narration || ""}
                 onChange={(e) => setForm({ ...form, narration: e.target.value })}
                 placeholder="Narration"
@@ -363,31 +421,31 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             </td>
           ) : (
             <td className="p-3">
-              <div className="text-[10px] text-slate-400 mb-0.5">Taxable value</div>
+              <div className="text-[11px] text-slate-400 mb-0.5">Taxable value</div>
               <input
                 type="number"
-                className="border border-slate-300 rounded px-2 py-1 text-sm w-24"
+                className="border border-slate-300 rounded px-2 py-1 text-[15.5px] w-28"
                 value={form.taxable_value ?? 0}
                 onChange={(e) => handleTaxableChange(e.target.value)}
               />
             </td>
           )}
           {isBank ? (
-            <td className="p-3 text-sm text-slate-400">—</td>
+            <td className="p-3 text-[15.5px] text-slate-400">—</td>
           ) : (
             <td className="p-3">
-              <div className="text-[10px] text-slate-400 mb-0.5">GST % → Total</div>
+              <div className="text-[11px] text-slate-400 mb-0.5">GST % → Total</div>
               <input
                 type="number"
-                className="border border-slate-300 rounded px-2 py-1 text-sm w-16"
+                className="border border-slate-300 rounded px-2 py-1 text-[15.5px] w-20"
                 value={form.gst_rate ?? 0}
                 onChange={(e) => handleRateChange(e.target.value)}
               />
-              <div className="text-sm font-medium text-slate-900 mt-1">
+              <div className="text-[15.5px] font-medium text-slate-900 mt-1">
                 ₹{formatMoney(computedTotal)}
               </div>
               <div
-                className={`text-[10px] ${
+                className={`text-[11px] ${
                   reconciled ? "text-emerald-600" : "text-rose-600"
                 }`}
               >
@@ -400,12 +458,12 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
         </>
       ) : (
         <>
-          <td className="p-3 text-sm text-slate-800">{tx.party}</td>
-          <td className="p-3 text-sm text-slate-600">{tx.date || "—"}</td>
-          <td className="p-3 text-sm text-slate-600">
+          <td className="p-3 text-[15.5px] text-slate-800">{tx.party}</td>
+          <td className="p-3 text-[15.5px] text-slate-600">{tx.date || "—"}</td>
+          <td className="p-3 text-[15.5px] text-slate-600">
             {tx.invoice_number || "—"}
             {tx.possible_duplicate && (
-              <span className="ml-1.5 text-[10px] font-semibold bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">
+              <span className="ml-1.5 text-[11px] font-semibold bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">
                 DUPLICATE?
               </span>
             )}
@@ -416,7 +474,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
               const names = itemList.map((it) => it.name).join(", ");
               return (
                 <span
-                  className="ml-1.5 text-[10px] font-semibold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded"
+                  className="ml-1.5 text-[11px] font-semibold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded"
                   title={`Item-wise voucher (${itemList.length} item${itemList.length > 1 ? "s" : ""}): ${names}`}
                 >
                   {itemList.length} ITEM{itemList.length > 1 ? "S" : ""}
@@ -425,24 +483,24 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             })()}
           </td>
           {isBank ? (
-            <td className="p-3 text-sm">
+            <td className="p-3 text-[15.5px]">
               {tx.credit > 0 ? (
                 <span className="font-medium text-emerald-700">Cr ₹{formatMoney(tx.credit)}</span>
               ) : (
                 <span className="font-medium text-rose-700">Dr ₹{formatMoney(tx.debit)}</span>
               )}
               {tx.narration && (
-                <div className="text-[10px] text-slate-400 max-w-[160px] truncate" title={tx.narration}>
+                <div className="text-[11px] text-slate-400 max-w-[160px] truncate" title={tx.narration}>
                   {tx.narration}
                 </div>
               )}
             </td>
           ) : (
-            <td className="p-3 text-sm font-medium text-slate-900">
+            <td className="p-3 text-[15.5px] font-medium text-slate-900">
               ₹{formatMoney(tx.total_value)}
             </td>
           )}
-          <td className="p-3 text-sm text-slate-600">
+          <td className="p-3 text-[15.5px] text-slate-600">
             {isBank ? (
               <span className="text-slate-400">—</span>
             ) : (
@@ -450,7 +508,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
                 {tx.gst_rate}%
                 {tx.gst_rate_uncertain && !tx.rate_breakdown && (
                   <span
-                    className="ml-1.5 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded"
+                    className="ml-1.5 text-[11px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded"
                     title="This Excel doesn't break the invoice down by rate — likely a mixed-rate invoice (multiple GST slabs on one bill)."
                   >
                     RATE UNCERTAIN
@@ -458,7 +516,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
                 )}
                 {tx.rate_breakdown && (
                   <span
-                    className="ml-1.5 text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded"
+                    className="ml-1.5 text-[11px] font-semibold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded"
                     title={`Resolved from supplier invoice '${tx.rate_breakdown_source || ""}'`}
                   >
                     RATE SPLIT RESOLVED
@@ -473,7 +531,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
       <td className="p-3">
         <ConfidenceBadge value={tx.confidence} />
         {tx.type === "SALES" && Number(tx.confidence || 0) < 0.8 && (
-          <div className="mt-1 text-[10px] font-medium text-amber-700">
+          <div className="mt-1 text-[11px] font-medium text-amber-700">
             Manual check required
           </div>
         )}
@@ -485,14 +543,14 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
         {isBank ? (
           <ReconciliationCell tx={tx} onChanged={onChanged} />
         ) : (
-          <span className="text-xs text-slate-400">—</span>
+          <span className="text-[13px] text-slate-400">—</span>
         )}
       </td>
       <td className="p-3">
         {tx.tally_status && tx.tally_status !== "NOT_SENT" ? (
           <StatusBadge status={tx.tally_status} />
         ) : (
-          <span className="text-xs text-slate-400">—</span>
+          <span className="text-[13px] text-slate-400">—</span>
         )}
       </td>
       <td className="p-3 whitespace-nowrap">
@@ -506,14 +564,14 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
                   ? "Taxable + GST must equal Total before saving"
                   : ""
               }
-              className="text-xs bg-slate-900 text-white px-2.5 py-1 rounded-md disabled:opacity-40 disabled:cursor-not-allowed"
+              className="text-[13px] bg-slate-900 text-white px-2.5 py-1 rounded-md disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Save
             </button>
             <button
               disabled={busy}
               onClick={cancelEdit}
-              className="text-xs border border-slate-300 px-2.5 py-1 rounded-md"
+              className="text-[13px] border border-slate-300 px-2.5 py-1 rounded-md"
             >
               Cancel
             </button>
@@ -523,21 +581,21 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             <button
               disabled={busy}
               onClick={startEdit}
-              className="text-xs border border-slate-300 px-2.5 py-1 rounded-md hover:bg-slate-100"
+              className="text-[13px] border border-slate-300 px-2.5 py-1 rounded-md hover:bg-slate-100"
             >
               Edit
             </button>
             <button
               disabled={busy || tx.status === "APPROVED"}
               onClick={() => act(api.approveTransaction)}
-              className="text-xs bg-emerald-600 text-white px-2.5 py-1 rounded-md disabled:opacity-40"
+              className="text-[13px] bg-emerald-600 text-white px-2.5 py-1 rounded-md disabled:opacity-40"
             >
               Approve
             </button>
             <button
               disabled={busy || tx.status === "REJECTED"}
               onClick={() => act(api.rejectTransaction)}
-              className="text-xs bg-rose-600 text-white px-2.5 py-1 rounded-md disabled:opacity-40"
+              className="text-[13px] bg-rose-600 text-white px-2.5 py-1 rounded-md disabled:opacity-40"
             >
               Reject
             </button>
@@ -621,7 +679,7 @@ export default function ReviewTable({ bills, onChanged }) {
 
   if (!bills.length) {
     return (
-      <div className="text-sm text-slate-400 py-8 text-center">
+      <div className="text-[15.5px] text-slate-400 py-8 text-center">
         No transactions here.
       </div>
     );
@@ -836,13 +894,13 @@ export default function ReviewTable({ bills, onChanged }) {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search party, invoice #, date…"
-              className="text-sm border border-slate-300 rounded-lg pl-8 pr-3 py-1.5 w-64 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+              className="text-[15.5px] border border-slate-300 rounded-lg pl-8 pr-3 py-1.5 w-64 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
             />
           </div>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="text-sm border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white"
+            className="text-[15.5px] border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white"
           >
             <option value="ALL">All statuses</option>
             {statusesPresent.map((s) => (
@@ -852,7 +910,7 @@ export default function ReviewTable({ bills, onChanged }) {
             ))}
           </select>
           {(searchQuery || statusFilter !== "ALL") && (
-            <span className="text-xs text-slate-400">
+            <span className="text-[13px] text-slate-400">
               {sortedBills.length} of {bills.length} shown
             </span>
           )}
@@ -865,7 +923,7 @@ export default function ReviewTable({ bills, onChanged }) {
             )
           }
           disabled={!sortedBills.length}
-          className="text-xs font-medium border border-slate-300 px-3 py-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-40 flex items-center gap-1.5"
+          className="text-[13px] font-medium border border-slate-300 px-3 py-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-40 flex items-center gap-1.5"
           title="Export currently visible rows to CSV"
         >
           <Icon.Download width={14} height={14} />
@@ -874,7 +932,7 @@ export default function ReviewTable({ bills, onChanged }) {
       </div>
 
       {/* Bulk Action Toolbar */}
-      <div className="flex items-center justify-between bg-slate-50 border border-slate-200 px-4 py-2.5 rounded-xl text-sm">
+      <div className="flex items-center justify-between bg-slate-50 border border-slate-200 px-4 py-2.5 rounded-xl text-[15.5px]">
         <span className="text-slate-600 font-medium">
           {selectedIds.length} of {allTxIds.length} selected
         </span>
@@ -885,7 +943,7 @@ export default function ReviewTable({ bills, onChanged }) {
               disabled={reconcileBusy}
               onClick={handleReconcile}
               title="Cross-checks bank credits/debits against your sales and purchase invoices by amount and date"
-              className="bg-white border border-slate-300 text-slate-700 text-xs font-medium px-3 py-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-40 transition-colors"
+              className="bg-white border border-slate-300 text-slate-700 text-[13px] font-medium px-3 py-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-40 transition-colors"
             >
               {reconcileBusy ? "Reconciling…" : "Reconcile with invoices"}
             </button>
@@ -893,21 +951,21 @@ export default function ReviewTable({ bills, onChanged }) {
           <button
             disabled={!selectedIds.length || bulkBusy}
             onClick={handleBulkApprove}
-            className="bg-emerald-600 text-white text-xs font-medium px-3 py-1.5 rounded-lg hover:bg-emerald-700 disabled:opacity-40 transition-colors"
+            className="bg-emerald-600 text-white text-[13px] font-medium px-3 py-1.5 rounded-lg hover:bg-emerald-700 disabled:opacity-40 transition-colors"
           >
             Approve Selected
           </button>
           <button
             disabled={!selectedIds.length || bulkBusy}
             onClick={handleBulkReject}
-            className="bg-amber-600 text-white text-xs font-medium px-3 py-1.5 rounded-lg hover:bg-amber-700 disabled:opacity-40 transition-colors"
+            className="bg-amber-600 text-white text-[13px] font-medium px-3 py-1.5 rounded-lg hover:bg-amber-700 disabled:opacity-40 transition-colors"
           >
             Reject Selected
           </button>
           <button
             disabled={!selectedIds.length || bulkBusy}
             onClick={handleBulkDelete}
-            className="bg-rose-600 text-white text-xs font-medium px-3 py-1.5 rounded-lg hover:bg-rose-700 disabled:opacity-40 transition-colors"
+            className="bg-rose-600 text-white text-[13px] font-medium px-3 py-1.5 rounded-lg hover:bg-rose-700 disabled:opacity-40 transition-colors"
           >
             Delete Selected
           </button>
@@ -915,7 +973,7 @@ export default function ReviewTable({ bills, onChanged }) {
             disabled={!pushableIds.length || pushBusy}
             onClick={handlePushInOrder}
             title="Pushes approved rows to Tally in exactly the order shown below (respects your current sort/filter)"
-            className="bg-indigo-600 text-white text-xs font-medium px-3 py-1.5 rounded-lg hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+            className="bg-indigo-600 text-white text-[13px] font-medium px-3 py-1.5 rounded-lg hover:bg-indigo-700 disabled:opacity-40 transition-colors"
           >
             {pushBusy ? "Pushing…" : `Push ${pushableIds.length} to Tally (this order)`}
           </button>
@@ -923,7 +981,7 @@ export default function ReviewTable({ bills, onChanged }) {
       </div>
 
       {reconcileResult && (
-        <div className="bg-white border border-slate-200 rounded-xl p-3 text-sm text-slate-600">
+        <div className="bg-white border border-slate-200 rounded-xl p-3 text-[15.5px] text-slate-600">
           Reconciled: <span className="font-medium text-emerald-700">{reconcileResult.matched} matched</span>
           {reconcileResult.ambiguous > 0 && (
             <>, <span className="font-medium text-amber-700">{reconcileResult.ambiguous} ambiguous</span> (needs your pick)</>
@@ -936,7 +994,7 @@ export default function ReviewTable({ bills, onChanged }) {
       )}
 
       {pushResults.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-1 text-sm">
+        <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-1 text-[15.5px]">
           {pushResults.map((r) => (
             <div
               key={r.transaction_id}
@@ -952,7 +1010,7 @@ export default function ReviewTable({ bills, onChanged }) {
       <div className="overflow-x-auto bg-white rounded-xl border border-slate-200">
         <table className="w-full">
           <thead>
-            <tr className="text-left text-xs font-semibold text-slate-500 uppercase border-b border-slate-200 bg-slate-50">
+            <tr className="text-left text-[13px] font-semibold text-slate-500 uppercase border-b border-slate-200 bg-slate-50">
               <th className="p-3 w-10">
                 <input
                   type="checkbox"
@@ -990,13 +1048,13 @@ export default function ReviewTable({ bills, onChanged }) {
             ))}
           </tbody>
           <tfoot>
-            <tr className="border-t-2 border-slate-200 bg-slate-50 text-sm font-semibold text-slate-700">
+            <tr className="border-t-2 border-slate-200 bg-slate-50 text-[15.5px] font-semibold text-slate-700">
               {isBankTable ? (
                 <>
                   <td className="p-3" colSpan={5}>
                     Totals ({sortedBills.length} row{sortedBills.length === 1 ? "" : "s"})
                   </td>
-                  <td className="p-3 text-xs text-slate-500 font-normal" colSpan={6}>
+                  <td className="p-3 text-[13px] text-slate-500 font-normal" colSpan={6}>
                     Debit ₹{formatMoney(totals.debit)} · Credit ₹{formatMoney(totals.credit)}
                   </td>
                 </>
@@ -1004,12 +1062,12 @@ export default function ReviewTable({ bills, onChanged }) {
                 <>
                   <td className="p-3" colSpan={5}>
                     Totals ({sortedBills.length} row{sortedBills.length === 1 ? "" : "s"})
-                    <span className="ml-2 text-xs text-slate-500 font-normal">
+                    <span className="ml-2 text-[13px] text-slate-500 font-normal">
                       Taxable ₹{formatMoney(totals.taxable)}
                     </span>
                   </td>
                   <td className="p-3">₹{formatMoney(totals.total)}</td>
-                  <td className="p-3 text-xs text-slate-500 font-normal" colSpan={5}>
+                  <td className="p-3 text-[13px] text-slate-500 font-normal" colSpan={5}>
                     CGST ₹{formatMoney(totals.cgst)} · SGST ₹{formatMoney(totals.sgst)} · IGST ₹{formatMoney(totals.igst)}
                   </td>
                 </>

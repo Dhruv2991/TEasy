@@ -51,8 +51,11 @@ def detect_four_bill_grid(img: np.ndarray) -> List[Box]:
 
     # Keep a small overlap around the gutter so a line/number sitting exactly
     # on a divider is not lost. The overlap is later clipped to page bounds.
+    # overlap_y is larger than overlap_x: the handwritten (often red) invoice
+    # number sits right at the top of each cell, just below the divider —
+    # under-cropping there silently drops the single most important field.
     overlap_x = max(8, int(w * 0.012))
-    overlap_y = max(8, int(h * 0.012))
+    overlap_y = max(16, int(h * 0.025))
 
     boxes = [
         (0, 0, min(w, x_cut + overlap_x), min(h, y_cut + overlap_y)),

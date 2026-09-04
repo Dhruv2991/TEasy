@@ -57,6 +57,14 @@ def detect_bills(img: np.ndarray, min_area_ratio: float = 0.03) -> List[Box]:
         # have reasonable width AND height relative to the page.
         if cw / w < 0.15 or ch / h < 0.15:
             continue
+        # Discard boxes that are mostly blank/background (e.g. table surface,
+        # margins) — a real bill region is dense with printed rulings and
+        # handwriting, so it should have a meaningful amount of ink inside it.
+        region_gray = gray[y:y + ch, x:x + cw]
+        region_edges = cv2.Canny(region_gray, 30, 100)
+        ink_ratio = np.count_nonzero(region_edges) / max(1, cw * ch)
+        if ink_ratio < 0.01:
+            continue
         boxes.append((x, y, cw, ch))
 
     # merge overlapping boxes (common when a bill's border + its text both trigger contours)
