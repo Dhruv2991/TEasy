@@ -12,22 +12,23 @@
   }
   *{box-sizing:border-box;}
   body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--ink);
-       max-width:980px;margin:0 auto;padding:40px 24px 100px;background:#f8fafc;line-height:1.5;}
+       max-width:1040px;margin:0 auto;padding:40px 24px 100px;background:#f8fafc;line-height:1.55;}
   h1{font-size:30px;margin-bottom:4px;}
   h2.section{font-size:22px;margin-top:64px;padding-top:24px;border-top:3px solid var(--sidebar-active);
              display:flex;align-items:center;gap:10px;}
   .step-num{background:var(--sidebar-active);color:#fff;width:32px;height:32px;border-radius:8px;
             display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex:none;}
   h3{font-size:16px;margin:28px 0 8px;color:var(--ink);}
+  h4{font-size:14px;margin:20px 0 6px;color:var(--ink);}
   p{color:#334155;font-size:14.5px;}
   .lede{color:var(--muted);font-size:16px;margin-top:0;}
   .note{background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:12px 16px;font-size:13.5px;color:#3730a3;margin:14px 0;}
   .warn{background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:12px 16px;font-size:13.5px;color:#9a3412;margin:14px 0;}
+  .tip{background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:12px 16px;font-size:13.5px;color:#065f46;margin:14px 0;}
   .caption{font-size:12.5px;color:var(--muted);text-align:center;margin-top:6px;font-style:italic;}
   .mock{border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 4px 18px rgba(15,23,42,.08);margin:16px 0;background:#fff;}
   .mock-frame-title{font-size:11px;background:#f1f5f9;color:#64748b;padding:6px 12px;border-bottom:1px solid var(--line);
                      font-family:ui-monospace,monospace;}
-  /* App shell mockup */
   .app-shell{display:flex;min-height:420px;font-size:13px;}
   .m-sidebar{width:200px;background:var(--sidebar-bg);color:#fff;flex:none;padding-bottom:10px;}
   .m-sb-head{display:flex;align-items:center;gap:8px;padding:14px 12px;border-bottom:1px solid #1e293b;}
@@ -69,24 +70,32 @@
   ul.checklist{list-style:none;padding-left:0;}
   ul.checklist li{padding:4px 0 4px 26px;position:relative;font-size:14px;color:#334155;}
   ul.checklist li::before{content:"✓";position:absolute;left:0;color:var(--green);font-weight:800;}
-  .toc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin-top:22px;}
+  .toc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin-top:22px;column-count:2;column-gap:32px;}
   .toc a{color:#4f46e5;text-decoration:none;font-size:14px;}
-  .toc li{margin:6px 0;}
+  .toc li{margin:6px 0;break-inside:avoid;}
   .badge-real{display:inline-block;font-size:10.5px;background:#fee2e2;color:#991b1b;border-radius:6px;padding:2px 8px;
               font-weight:700;margin-left:8px;vertical-align:middle;}
+  .xltable{border-collapse:collapse;width:100%;font-size:12px;margin:10px 0;}
+  .xltable th{background:#f1f5f9;color:#475569;text-align:left;padding:6px 9px;border:1px solid var(--line);font-size:11px;}
+  .xltable td{padding:6px 9px;border:1px solid var(--line);color:#334155;}
+  .xltable td.hdr{background:#eef2ff;color:#3730a3;font-weight:600;font-size:11px;}
+  code.inline{background:#f1f5f9;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12.5px;color:#334155;}
+  .errtable{border-collapse:collapse;width:100%;font-size:12.5px;margin:10px 0;}
+  .errtable th{background:#f1f5f9;color:#475569;text-align:left;padding:8px 10px;border:1px solid var(--line);font-size:11px;}
+  .errtable td{padding:8px 10px;border:1px solid var(--line);color:#334155;vertical-align:top;}
 </style>
 </head>
 <body>
 
 <h1>TEasy — Complete User Guide</h1>
-<p class="lede">From installing TEasy to pushing your first voucher into Tally, step by step.</p>
+<p class="lede">From installing TEasy to pushing a fully itemized, multi-rate voucher into Tally — every upload
+format, every badge, and every common error explained.</p>
 
 <div class="note">
 <strong>About the pictures in this guide:</strong> these are accurate mockups rebuilt directly from TEasy's own
 source code — same screen names, same field labels, same button text, same colors as your real sidebar (dark
-navy with the indigo highlight) and Review table. They are not literal screenshots of a running session, since
-this guide was put together without access to a live, logged-in copy of your app. Everything they show matches
-what you'll actually see.
+navy with the indigo highlight) and Review table. They are not literal screenshots of a running session. Everything
+they show matches what you'll actually see.
 </div>
 
 <div class="toc">
@@ -94,13 +103,21 @@ what you'll actually see.
 <ol>
 <li><a href="#step1">Activate your license (trial / subscribe)</a></li>
 <li><a href="#step2">First-run setup &amp; connecting to Tally</a></li>
+<li><a href="#step2b">Multiple companies &amp; per-company Tally settings</a></li>
 <li><a href="#step3">Getting around: the sidebar</a></li>
-<li><a href="#step4">Uploading documents (Sales / Purchase / GSTR-2B)</a></li>
+<li><a href="#step4">Uploading Sales Bills — photo/PDF vs Excel</a></li>
+<li><a href="#step4b">The exact Excel formats TEasy understands</a></li>
+<li><a href="#step4c">Multi-item &amp; multi-GST-rate invoices, explained with a real example</a></li>
+<li><a href="#step4d">Purchase (B2B Excel) and Discount (GSTR-2B)</a></li>
+<li><a href="#step4e">Bank Statements</a></li>
 <li><a href="#step5">Review &amp; Approve</a></li>
+<li><a href="#step5b">Viewing the original bill image</a></li>
 <li><a href="#step6">Pushing approved transactions to Tally</a></li>
-<li><a href="#step7">Handling duplicates &amp; item-wise vouchers</a></li>
+<li><a href="#step6b">Common Tally push errors, explained</a></li>
+<li><a href="#step7">Duplicate detection, precisely</a></li>
 <li><a href="#step8">Pending Issues, Reports &amp; Reconciliation</a></li>
 <li><a href="#step9">Companies, Parties &amp; GST Settings</a></li>
+<li><a href="#step9b">AI provider settings (Groq / Gemini)</a></li>
 <li><a href="#step10">Account &amp; Billing</a></li>
 </ol>
 </div>
@@ -167,13 +184,36 @@ connected" indicator also sits at the bottom of the sidebar at all times.</p>
   <li>Open Tally on the machine TEasy can reach, load your company, and enable the ODBC/HTTP gateway
       (Tally → F12 → Advanced Configuration, or your usual Tally Server settings) on the port you'll enter below.</li>
   <li>In TEasy, go to <strong>Tally Integration</strong> in the sidebar.</li>
-  <li>Enter the host (usually <code>localhost</code> if TEasy and Tally are on the same PC), the port
-      (commonly <code>9000</code>), and the exact company name as it appears inside Tally.</li>
+  <li>Enter the host (usually <code class="inline">localhost</code> if TEasy and Tally are on the same PC), the port
+      (commonly <code class="inline">9000</code>), and the exact company name <strong>character-for-character</strong>
+      as it appears inside Tally — including the year suffix if your company is named e.g. "Sarvotham Traders 2026-27".</li>
   <li>Click <strong>Test Connection</strong> — you should see it flip to <strong>Connected</strong>.</li>
   <li>Save. The sidebar's "Tally Status" indicator should now show a green dot.</li>
 </ol>
 <div class="note">If the test fails: double-check Tally is actually open with that exact company loaded, the
-port matches Tally's configured gateway port, and no firewall is blocking that port on the host machine.</div>
+port matches Tally's configured gateway port, and no firewall is blocking that port on the host machine. Also
+check <strong>F3 (Select Company)</strong> inside Tally — if more than one company is loaded at once, make sure
+the one TEasy is configured for is actually one of them, not just the one currently on screen.</div>
+
+<!-- ================= STEP 2b: per-company Tally settings ================= -->
+<h2 class="section" id="step2b"><span class="step-num">2b</span> Multiple companies &amp; per-company Tally settings</h2>
+<p>If you keep books for more than one business in TEasy (see <strong>Companies</strong> in the sidebar), each
+company has its <strong>own, independent</strong> Tally Integration settings — its own host, port, company name,
+and ledger-name configuration (Sales Account, Output CGST/SGST/IGST, Purchase Account, Input CGST/SGST/IGST, Cash
+ledger, Round-off ledger, Bank ledger).</p>
+<ul class="checklist">
+  <li>Switching the active company from the <strong>Company Switcher</strong> (top bar) automatically switches
+      which saved Tally Integration configuration is in effect — you don't need to re-enter anything for a
+      company you've already configured once.</li>
+  <li>The very <strong>first time</strong> a newly-added company is selected, its Tally Integration page starts
+      blank (sensible defaults only) until you fill in and save its own host/port/company name.</li>
+  <li>Every page that depends on "which company am I looking at" (Transactions, Reports, Reconciliation, Review
+      &amp; Approve) also switches together with the active company — so you always see that company's own data,
+      not a mix.</li>
+</ul>
+<div class="warn"><strong>Before pushing anything after a company switch:</strong> open Tally Integration and
+confirm the Company Name field matches the business you actually intend to push into. Pushing while the wrong
+company's config is loaded sends vouchers into the wrong company's books.</div>
 
 <!-- ================= STEP 3 ================= -->
 <h2 class="section" id="step3"><span class="step-num">3</span> Getting around: the sidebar</h2>
@@ -226,10 +266,9 @@ port matches Tally's configured gateway port, and no firewall is blocking that p
 Approve is where most of your day-to-day work happens), and <strong>Settings</strong>.</p>
 
 <!-- ================= STEP 4 ================= -->
-<h2 class="section" id="step4"><span class="step-num">4</span> Uploading documents</h2>
-<p>TEasy has a dedicated upload page per document type — <strong>Sales Bills</strong>, <strong>Purchase
-(B2B Excel)</strong>, and <strong>Discount (GSTR-2B Excel)</strong> — all under the sidebar's Documents section.
-You can drop in a bill photo/PDF, or an Excel sheet (including Tally's own item-wise voucher template).</p>
+<h2 class="section" id="step4"><span class="step-num">4</span> Uploading Sales Bills — photo/PDF vs Excel</h2>
+<p>The <strong>Sales Bills</strong> page accepts two completely different kinds of upload, and TEasy treats them
+very differently:</p>
 
 <div class="mock">
   <div class="mock-frame-title">Sales Bills — upload</div>
@@ -242,23 +281,152 @@ You can drop in a bill photo/PDF, or an Excel sheet (including Tally's own item-
     </div>
     <div style="margin-top:14px;font-size:12px;color:#64748b;">
       <div style="display:flex;justify-content:space-between;border:1px solid #f1f5f9;border-radius:8px;padding:6px 10px;margin-bottom:5px;">
-        <span>sales_template.xlsx</span><span style="color:#059669;">Done</span></div>
+        <span>sales_register.xlsx</span><span style="color:#059669;">Done</span></div>
     </div>
   </div>
 </div>
-<p class="caption">Upload box — accepts single files or a multi-file batch depending on the page. Each file is
-processed automatically after upload; you don't need to do anything else here.</p>
 
-<h3>What happens after you upload</h3>
-<ol>
-  <li>TEasy reads the file — a photo/PDF goes through OCR, an Excel sheet is parsed directly (it recognizes both a
-      plain "one row per bill" layout and Tally's own item-wise voucher template with Stock Item / Qty / Rate columns).</li>
-  <li>Every bill line becomes a draft transaction with status <strong>NEEDS_REVIEW</strong>.</li>
-  <li>Lines that share the same invoice number and party get automatically combined into a single voucher — so a
-      multi-item or multi-GST-rate bill still becomes just one entry, not several.</li>
-  <li>The <strong>Review &amp; Approve</strong> badge count in the sidebar goes up by however many new transactions
-      just landed there.</li>
-</ol>
+<h4>Option A — a bill photo, PDF, or scan</h4>
+<ul class="checklist">
+  <li>Best for a handwritten cash-sale bill book, or any printed invoice you only have as a picture/PDF.</li>
+  <li>TEasy sends the image to an AI vision model (Groq or Gemini — see <a href="#step9b">AI provider settings</a>)
+      with a prompt tuned specifically for reading party, invoice number, date, taxable value, and GST breakdown.</li>
+  <li>A bill-book page with four handwritten bills arranged 2×2 is automatically split into four separate bills
+      before reading — you don't need to crop them yourself.</li>
+  <li>If the AI can't confidently read a field, it returns <strong>null</strong> for that field rather than
+      guessing — you'll see it blank in Review &amp; Approve, ready for you to fill in by hand, instead of a
+      wrong number that looks confident.</li>
+  <li>Every AI-read Sales row also goes through a deterministic arithmetic check (taxable + tax = total, within a
+      small rounding tolerance) before it's allowed anywhere near "ready to approve" — the AI's own confidence
+      score is never the only gate.</li>
+</ul>
+
+<h4>Option B — an Excel sheet (your sales register)</h4>
+<ul class="checklist">
+  <li>Best when you already keep your sales bills in a spreadsheet, or you've exported a Sales Register straight
+      out of Tally itself.</li>
+  <li>No AI/OCR involved at all — every number comes directly from the cells in the sheet, so confidence is 100%
+      unless a required field (like a date) is genuinely missing from a row.</li>
+  <li>TEasy recognizes <strong>two different Excel layouts</strong> automatically — see the next section for the
+      exact columns each one needs.</li>
+</ul>
+<div class="tip"><strong>Not sure which one to use?</strong> If you can export a proper Excel sales register
+(from Tally, from your billing software, or you already maintain one), always prefer the Excel path — it's exact,
+instant, and free. Save the photo/AI path for bills you genuinely only have as a picture.</div>
+
+<!-- ================= STEP 4b: exact excel formats ================= -->
+<h2 class="section" id="step4b"><span class="step-num">4b</span> The exact Excel formats TEasy understands</h2>
+<p>TEasy looks at your sheet's header row and figures out which of two layouts you've given it. Column order
+doesn't matter — it matches by header <em>name</em>, not position — and it's tolerant of a few common spelling
+variants (e.g. "Party Ledger" or just "Party", "Vch. No." or "Invoice Number"). It also works whether your
+column headers have a trailing <code class="inline">*</code>, a period, or extra spaces (Tally's own export
+literally writes <code class="inline">"Vch. Date* "</code> with a trailing space, and that's handled fine).</p>
+
+<h4>Format 1 — Tally's own item-wise voucher template (recommended)</h4>
+<p>This is the exact layout Tally Prime produces when you export a Sales Register with item detail, or the
+layout of Tally's official blank import template. If you fill this in (or export it from Tally), every stock
+item, quantity, and GST slab survives all the way through to the pushed voucher.</p>
+<table class="xltable">
+  <tr><th>Column header</th><th>What goes in it</th></tr>
+  <tr><td class="hdr">Vch. Date* / Invoice Date</td><td>Bill date. DD-MM-YYYY, DD/MM/YYYY, or an Excel date cell all work.</td></tr>
+  <tr><td class="hdr">Vch. Type*</td><td>Optional. "Sales", "Credit Note", "Debit Note" — lets one sheet mix voucher types; if blank, everything uses the page's own type (Sales).</td></tr>
+  <tr><td class="hdr">Vch. No.* / Invoice Number</td><td>The bill/invoice number. Rows sharing the same number <em>and</em> party are automatically merged into one voucher (see next section).</td></tr>
+  <tr><td class="hdr">Party Ledger*</td><td>Customer name exactly as it should appear (or already appears) as a ledger in Tally.</td></tr>
+  <tr><td class="hdr">Sales Ledger*</td><td>Optional override of which Sales ledger to post to; TEasy otherwise picks/creates one based on the GST rate.</td></tr>
+  <tr><td class="hdr">Stock Item</td><td>The item/product name or code for this line.</td></tr>
+  <tr><td class="hdr">Quantity, Rate, Unit</td><td>Optional item detail — shown on the pushed voucher's inventory line if present.</td></tr>
+  <tr><td class="hdr">Amount*</td><td>This line's taxable value, <strong>before</strong> tax.</td></tr>
+  <tr><td class="hdr">IGST 5% / CGST 2.5% / SGST 2.5%<br>(…and the 12/18/28% equivalents)</td><td>Tally's per-slab tax columns — put this line's tax amount in whichever rate column actually applies to it, leave the rest blank.</td></tr>
+</table>
+<p>Some exports use a slightly different wide layout instead of the fixed IGST/CGST/SGST-per-slab columns above —
+repeated <code class="inline">TAXABLE @5%</code>, <code class="inline">TAXABLE @18%</code>-style columns per
+rate, each paired with its own CGST/SGST/IGST column. TEasy recognizes this pattern too, and keeps the Stock Item
+detail intact either way.</p>
+
+<h4>Format 2 — a plain "one row per bill" register</h4>
+<p>Simpler, no item-level detail — one row is one full invoice.</p>
+<table class="xltable">
+  <tr><th>Column header</th><th>What goes in it</th></tr>
+  <tr><td class="hdr">Party / Party Name / Customer</td><td>Customer name.</td></tr>
+  <tr><td class="hdr">Date / Bill Date / Invoice Date</td><td>Bill date.</td></tr>
+  <tr><td class="hdr">Invoice No. / Bill No. / Vch No.</td><td>Invoice number.</td></tr>
+  <tr><td class="hdr">Taxable Value / Amount</td><td>This invoice's taxable value before tax.</td></tr>
+  <tr><td class="hdr">GST Rate / GST %</td><td>Combined GST rate, e.g. 18 for 18% (9% CGST + 9% SGST).</td></tr>
+  <tr><td class="hdr">CGST / SGST / IGST</td><td>Tax amounts, if you have them as separate columns instead of a single rate.</td></tr>
+  <tr><td class="hdr">Total / Total Value / Grand Total</td><td>Tax-inclusive total. If omitted, TEasy calculates it from taxable + tax.</td></tr>
+</table>
+<div class="note">If a sheet has neither layout — an unfamiliar export from a different billing system, a bank
+statement dropped in the wrong page, etc. — and an AI provider key is configured (see
+<a href="#step9b">AI provider settings</a>), TEasy makes one automatic attempt to have the AI figure out which
+column is which before giving up. If that still fails, or no AI key is set, you'll get a clear error naming what
+it couldn't find, rather than a silent wrong import.</div>
+
+<!-- ================= STEP 4c: multi-item / multi-rate explained ================= -->
+<h2 class="section" id="step4c"><span class="step-num">4c</span> Multi-item &amp; multi-GST-rate invoices, explained with a real example</h2>
+<p>A single real invoice very often spans several Excel <em>rows</em> — one row per stock item, and different
+items on the same bill can sit at different GST rates. TEasy always merges these back into <strong>one</strong>
+voucher per real-world invoice, never one voucher per row. Here's an actual example:</p>
+
+<table class="xltable">
+  <tr><th>Vch. No.</th><th>Party</th><th>Stock Item</th><th>Amount</th><th>Rate</th></tr>
+  <tr><td>INV-996</td><td>Cash</td><td>34031900</td><td>₹44.50</td><td>18%</td></tr>
+  <tr><td>INV-996</td><td>Cash</td><td>27101972</td><td>₹4.45</td><td>18%</td></tr>
+  <tr><td>INV-996</td><td>Cash</td><td>27101972</td><td>₹12.72</td><td>18%</td></tr>
+  <tr><td>INV-996</td><td>Cash</td><td>34039900</td><td>₹127.12</td><td>18%</td></tr>
+  <tr><td>INV-996</td><td>Cash</td><td>998881</td><td>₹100.00</td><td>18%</td></tr>
+</table>
+<p style="text-align:center;color:var(--muted);font-size:13px;">↓ merges into ↓</p>
+<div class="mock" style="max-width:640px;margin:0 auto;">
+  <div class="mock-frame-title">Review &amp; Approve — one merged row</div>
+  <div style="padding:14px 18px;">
+    <div style="display:flex;justify-content:space-between;font-size:13px;">
+      <span><strong>Cash</strong> · INV-996 <span class="pill indigo" style="margin-left:4px;">5 ITEMS</span></span>
+      <span><strong>₹288.79</strong></span>
+    </div>
+    <div style="font-size:11.5px;color:var(--muted);margin-top:4px;">18% · CGST ₹25.98 · SGST ₹25.98 · Total ₹340.75</div>
+  </div>
+</div>
+
+<p>The rule TEasy uses: any rows sharing the <strong>same party and the same invoice/voucher number</strong> are
+one invoice, no matter how many item lines or how many different GST rates are involved. When a bill genuinely
+mixes rates (say, some items at 5% and others at 18%), the merged transaction carries a <strong>rate
+breakdown</strong> — each rate's own taxable value, CGST, SGST, and IGST — and the pushed Tally voucher gets a
+separate tax-ledger line per rate, not one blended number.</p>
+<ul class="checklist">
+  <li>Every stock item is preserved and pushed as its own inventory line under the one voucher — you'll see all
+      five item names inside that single Tally voucher, each with its own quantity/rate/amount.</li>
+  <li>The <strong>"N ITEMS"</strong> badge next to the invoice number tells you at a glance this is a merged,
+      multi-line bill — hover it to see the item names without opening Edit.</li>
+  <li>A <strong>"RATE SPLIT RESOLVED"</strong> badge means a mixed-rate invoice's slab-by-slab breakdown has been
+      confirmed (either straight from the sheet, or reconciled later against a supplier's purchase register).</li>
+  <li>A <strong>"RATE UNCERTAIN"</strong> badge (Purchase side, from GSTR-2B) means the government data didn't
+      break a mixed-rate invoice down by slab — use <strong>Purchase register match</strong> (upload your own
+      purchase register) to resolve it before pushing.</li>
+</ul>
+
+<!-- ================= STEP 4d ================= -->
+<h2 class="section" id="step4d"><span class="step-num">4d</span> Purchase (B2B Excel) and Discount (GSTR-2B)</h2>
+<h4>Purchase (B2B Excel)</h4>
+<p>Upload the B2B invoice sheet from your GSTR-2B download (or an equivalent supplier-invoice export). Every
+value — supplier name, GSTIN, invoice number/date, taxable value, CGST/SGST/IGST, total — comes directly from
+the structured government data, not a guess. A mixed-rate purchase invoice may appear as more than one row
+sharing the same invoice number (one row per rate) — those are legitimate separate lines of one bill, not
+duplicates, and are merged the same way as the Sales Excel path.</p>
+
+<h4>Discount (GSTR-2B Excel) — Credit / Debit Notes</h4>
+<p>Upload the B2B-CDNR sheet from GSTR-2B to import Credit Notes and Debit Notes issued by your suppliers. The
+GST portal's own "Note type" is shown as-is (Credit Note stays labeled Credit Note) rather than TEasy guessing
+which direction it should be entered on your side — you apply the correct Tally treatment with full context
+during review.</p>
+
+<!-- ================= STEP 4e ================= -->
+<h2 class="section" id="step4e"><span class="step-num">4e</span> Bank Statements</h2>
+<p>Upload your bank statement (PDF or Excel) under <strong>Bank Statements</strong>. Each transaction becomes a
+row with a Debit or Credit amount and whatever narration the bank provided. Once you also have Sales/Purchase
+transactions on file, use <strong>Reconcile with invoices</strong> from the bulk-action bar to automatically
+match bank entries against invoices by amount and date — entries that can't be matched confidently are marked
+<strong>AMBIGUOUS</strong> (more than one same-amount candidate) or <strong>UNMATCHED</strong>, both with a
+one-click picker to resolve manually.</p>
 
 <!-- ================= STEP 5 ================= -->
 <h2 class="section" id="step5"><span class="step-num">5</span> Review &amp; Approve</h2>
@@ -271,14 +439,15 @@ processed automatically after upload; you don't need to do anything else here.</
       <tr><th></th><th>Bill</th><th>Party</th><th>Date</th><th>Invoice #</th><th>Total</th><th>GST %</th>
           <th>Confidence</th><th>Status</th><th>Tally</th><th>Actions</th></tr>
       <tr>
-        <td><input type="checkbox"></td><td>📄</td><td>Cash</td><td>2026-04-01</td>
-        <td>INV-101</td><td><strong>₹29,500.00</strong></td><td>18%</td>
+        <td><input type="checkbox"></td><td>📄</td><td>Cash</td><td>2026-08-01</td>
+        <td>INV-996 <span style="font-size:9px;background:#e0e7ff;color:#3730a3;border-radius:5px;padding:1px 5px;margin-left:3px;">5 ITEMS</span></td>
+        <td><strong>₹340.75</strong></td><td>18%</td>
         <td style="color:#059669;">100%</td><td><span class="pill green">APPROVED</span></td>
         <td><span class="pill indigo">SENT</span></td>
         <td><span class="m-btn" style="font-size:10.5px;padding:3px 8px;">Edit</span></td>
       </tr>
       <tr>
-        <td><input type="checkbox"></td><td>📄</td><td>ABC Traders</td><td>2026-04-02</td>
+        <td><input type="checkbox"></td><td>📄</td><td>ABC Traders</td><td>2026-08-02</td>
         <td>INV-102 <span style="font-size:9px;background:#e0e7ff;color:#3730a3;border-radius:5px;padding:1px 5px;margin-left:3px;">2 ITEMS</span></td>
         <td><strong>₹97,025.00</strong></td><td>18% / 5%</td>
         <td style="color:#059669;">96%</td><td><span class="pill amber">NEEDS_REVIEW</span></td>
@@ -286,7 +455,7 @@ processed automatically after upload; you don't need to do anything else here.</
         <td><span class="m-btn green" style="font-size:10.5px;padding:3px 8px;">Approve</span></td>
       </tr>
       <tr>
-        <td><input type="checkbox"></td><td>📄</td><td>Ramesh Traders</td><td>2026-04-05</td>
+        <td><input type="checkbox"></td><td>📄</td><td>Ramesh Traders</td><td>2026-08-05</td>
         <td>INV-200 <span style="font-size:9px;background:#fee2e2;color:#be123c;border-radius:5px;padding:1px 5px;margin-left:3px;">DUPLICATE?</span></td>
         <td><strong>₹17,700.00</strong></td><td>18%</td>
         <td style="color:#d97706;">88%</td><td><span class="pill amber">NEEDS_REVIEW</span></td>
@@ -300,22 +469,33 @@ processed automatically after upload; you don't need to do anything else here.</
     </div>
   </div>
 </div>
-<p class="caption">Each row is one bill. The little badges next to the invoice number flag things worth a second
-look — <span style="color:#3730a3;">item-wise vouchers</span> and <span style="color:#be123c;">possible
-duplicates</span> — before you approve.</p>
+<p class="caption">Each row is one bill — even one that started as five spreadsheet lines. The little badges next
+to the invoice number flag things worth a second look before you approve.</p>
 
 <h3>Working through this screen</h3>
 <ol>
   <li><strong>Check the numbers</strong> — party, date, invoice #, total, GST% and its breakdown are all pulled
       automatically; the Confidence column tells you how sure TEasy is.</li>
-  <li>If something's off, hit <strong>Edit</strong> to correct the party, date, amounts, or GST rate by hand.</li>
-  <li>If a row is flagged <strong>DUPLICATE?</strong>, check it against what's already in Tally before approving —
-      it means TEasy found an earlier transaction with the same party, invoice number, and amount.</li>
+  <li>If something's off, hit <strong>Edit</strong> to correct the party, date, amounts, or GST rate by hand —
+      Taxable value and GST% recompute the total live as you type, and Save is disabled until they balance.</li>
+  <li>If a row is flagged <strong>DUPLICATE?</strong>, check it against what's already in Tally before approving
+      — see <a href="#step7">Duplicate detection, precisely</a> for exactly what triggers this.</li>
   <li>Once a row looks right, click <strong>Approve</strong> (or tick several boxes and use <strong>Approve
       Selected</strong>).</li>
   <li>Wrong entry entirely (e.g. not a real bill, or a genuine duplicate)? Click <strong>Reject</strong> — it
       won't be pushed and won't keep nagging you.</li>
+  <li>Search, filter by status, sort any column, and <strong>Export CSV</strong> all work on exactly the rows
+      currently visible/filtered — handy for a quick sanity check before a big push.</li>
 </ol>
+
+<!-- ================= STEP 5b: bill image viewer ================= -->
+<h2 class="section" id="step5b"><span class="step-num">5b</span> Viewing the original bill image</h2>
+<p>For any row that came from a photo, PDF, or scan (not an Excel/GSTR-2B row — those have no source image),
+click its thumbnail in the <strong>Bill</strong> column to open a full-size view of exactly what TEasy read from
+— the fastest way to double-check a low-confidence field against the original bill without leaving the page.
+Press <strong>Esc</strong> or click outside the image to close it.</p>
+<div class="tip">Rows without a source photo (Excel or GSTR-2B imports) show a plain document icon instead —
+that's expected, there's nothing to view for those.</div>
 
 <!-- ================= STEP 6 ================= -->
 <h2 class="section" id="step6"><span class="step-num">6</span> Pushing approved transactions to Tally</h2>
@@ -323,33 +503,75 @@ duplicates</span> — before you approve.</p>
 always in control of exactly what gets written into your books.</p>
 <ol>
   <li>From <strong>Review &amp; Approve</strong>, once you're happy with a batch of <span class="pill green">APPROVED</span> rows, click
-      <strong>Push Approved to Tally</strong> (you can also push a single row from its own Actions menu).</li>
-  <li>TEasy builds the correct Tally voucher XML for each one — Sales, Purchase, or Debit/Credit Note — and sends
-      it straight to Tally's gateway.</li>
+      <strong>Push Approved to Tally</strong> — it pushes in exactly the order the rows are currently
+      sorted/filtered, so you can control voucher ordering by sorting first.</li>
+  <li>TEasy builds the correct Tally voucher XML for each one — Sales, Purchase, or Debit/Credit Note — with a
+      proper inventory line per stock item when the invoice has item detail, and sends it straight to Tally's gateway.</li>
   <li>Any ledger or stock item that doesn't exist in Tally yet gets auto-created (Sundry Debtors/Creditors, Sales/
-      Purchase Accounts, CGST/SGST/IGST ledgers, stock items) so the push doesn't fail on a missing master.</li>
+      Purchase Accounts, CGST/SGST/IGST ledgers, stock items, units of measure) so the push doesn't fail on a
+      missing master. Common built-in ledgers Tally ships with every company (like Cash) are recognized and left
+      alone rather than being redundantly re-created.</li>
   <li>The <strong>Tally</strong> column updates to <span class="pill indigo">SENT</span> on success, or
       <span class="pill red">FAILED</span> with the reason if Tally rejected it.</li>
 </ol>
-<div class="warn"><strong>If a push fails:</strong> the Tally column shows why (hover or open the row). Common
-causes are Tally not being open/connected, the company name not matching exactly, or a required field (like a
-missing date) that needs fixing back in Review &amp; Approve before you retry.</div>
+
+<!-- ================= STEP 6b: common errors ================= -->
+<h2 class="section" id="step6b"><span class="step-num">6b</span> Common Tally push errors, explained</h2>
+<table class="errtable">
+  <tr><th>Message</th><th>What it means / what to do</th></tr>
+  <tr>
+    <td><strong>Bill already exists in Tally (Invoice #… already recorded)</strong></td>
+    <td>Tally found an existing voucher with that exact number and altered it instead of creating a new one —
+        usually because this invoice number was already pushed once before (including an earlier failed/partial
+        attempt). Check Tally's Day Book for that voucher number (Tally: <strong>Alt+G</strong>, type the
+        number) before re-pushing, so you don't end up with it altered twice.</td>
+  </tr>
+  <tr>
+    <td><strong>Stock Item '…' does not exist!</strong></td>
+    <td>The voucher tried to use a stock item master Tally hadn't fully registered yet at the moment of
+        validation. TEasy proactively creates missing stock item/unit masters in their own request just before
+        the voucher, specifically to avoid this — if you still see it, try the push again once (Tally sometimes
+        needs a beat to commit a brand-new master), and confirm Tally is reachable and not mid-backup/mid-sync.</td>
+  </tr>
+  <tr>
+    <td><strong>Mismatch in total amount between Credit and Debit entries</strong> (Tally's own Import
+        Exceptions screen)</td>
+    <td>The voucher was received with an unbalanced set of ledger entries and Tally refused to finalize it —
+        nothing was written to your books. If you see this after upgrading TEasy, make sure you're on the latest
+        version; this exact message was caused by a voucher-XML formatting issue that's since been fixed.</td>
+  </tr>
+  <tr>
+    <td><strong>This transaction has no valid date</strong></td>
+    <td>Open the row in Review &amp; Approve, set a real invoice date, save, then push again.</td>
+  </tr>
+  <tr>
+    <td><strong>Connection / Tally not reachable</strong></td>
+    <td>Confirm Tally is open with the correct company loaded, the host/port in Tally Integration match Tally's
+        actual gateway settings, and no firewall is blocking the port — see <a href="#step2">step 2</a>.</td>
+  </tr>
+</table>
+<div class="warn">A push failure never silently loses data — the transaction stays exactly as it was
+(<strong>APPROVED</strong>, not sent) so you can fix the underlying issue and push again without re-entering
+anything.</div>
 
 <!-- ================= STEP 7 ================= -->
-<h2 class="section" id="step7"><span class="step-num">7</span> Duplicates &amp; item-wise vouchers</h2>
-
-<h3>Duplicate detection</h3>
-<p>TEasy only flags a bill as a possible duplicate when the <strong>party, invoice number, and amount all
-match</strong> an existing transaction. The same invoice number showing up again with a different party or a
-different amount is treated as a normal, separate bill — which is common (different sellers reuse invoice
-numbers, or the same invoice number gets corrected later with a different total).</p>
-
-<h3>Item-wise vouchers</h3>
-<p>When an uploaded sheet lists individual stock items (Tally's own item-wise voucher template — Stock Item,
-Quantity, Rate, Amount, plus GST-slab columns), TEasy keeps that detail all the way through to Tally: the voucher
-it pushes carries a proper line per stock item rather than a single lump-sum amount, and it'll auto-create any
-stock item master that doesn't already exist in Tally. You'll see an <strong>"N ITEMS"</strong> badge in Review
-&amp; Approve on any row that came in this way — hover it to see which items are on the bill.</p>
+<h2 class="section" id="step7"><span class="step-num">7</span> Duplicate detection, precisely</h2>
+<p>TEasy flags a transaction <strong>DUPLICATE?</strong> only when <strong>all three</strong> of these match an
+existing transaction of the same type: <strong>party</strong>, <strong>invoice number</strong>, and
+<strong>taxable value</strong> (within about ₹1, so a genuine multi-rate line of the same invoice isn't mistaken
+for a duplicate of itself). The same invoice number showing up again with a different party, or a meaningfully
+different amount, is treated as a normal, separate bill — common when different suppliers reuse invoice
+numbering, or a bill gets corrected later with a different total.</p>
+<ul class="checklist">
+  <li>This is <strong>advisory, not a block</strong> — a flagged row can still be approved and pushed; it's a
+      prompt to glance at it first, not a lock.</li>
+  <li>It can occasionally flag a genuine coincidence (same party, same invoice number range, same rounded
+      amount) as a false positive — that's an accepted trade-off of a check that would otherwise miss real
+      duplicates too easily.</li>
+  <li>It can also, in principle, miss a real duplicate that was re-entered with a slightly different invoice
+      number or a rupee or two of difference from re-reading — nothing here replaces a periodic look at your Day
+      Book.</li>
+</ul>
 
 <!-- ================= STEP 8 ================= -->
 <h2 class="section" id="step8"><span class="step-num">8</span> Pending Issues, Reports &amp; Reconciliation</h2>
@@ -368,12 +590,26 @@ stock item master that doesn't already exist in Tally. You'll see an <strong>"N 
 <!-- ================= STEP 9 ================= -->
 <h2 class="section" id="step9"><span class="step-num">9</span> Companies, Parties &amp; GST Settings</h2>
 <ul class="checklist">
-  <li><strong>Companies</strong> — manage which Tally company (or companies) TEasy is set up to work with.</li>
+  <li><strong>Companies</strong> — manage which Tally company (or companies) TEasy is set up to work with; see
+      <a href="#step2b">per-company Tally settings</a> above.</li>
   <li><strong>Parties &amp; Ledgers</strong> — review how party names in your bills map to ledgers in Tally, and
       fix any mismatches so future auto-creation picks the right ledger group.</li>
   <li><strong>GST Settings</strong> — the ledger names TEasy uses for CGST/SGST/IGST and your default sales/
       purchase accounts per rate, plus your round-off ledger.</li>
   <li><strong>Users</strong> — manage who on your team has access.</li>
+</ul>
+
+<!-- ================= STEP 9b: AI providers ================= -->
+<h2 class="section" id="step9b"><span class="step-num">9b</span> AI provider settings (Groq / Gemini)</h2>
+<p>Under <strong>General Settings</strong>, choose which AI provider reads your bill photos and (as a fallback)
+maps unfamiliar Excel layouts: <strong>Groq</strong> or <strong>Gemini</strong>. Both use the identical
+underlying prompts and validation — switching providers is a settings change, not a different feature.</p>
+<ul class="checklist">
+  <li>Paste your own free API key here to use your own quota, at your own pace, with no limits from us.</li>
+  <li>Leave it blank to use TEasy's own included AI access — no key needed, usage is simply covered as part of
+      your plan.</li>
+  <li>Photo/PDF uploads with no AI provider available at all still work — you get a blank NEEDS_REVIEW row per
+      detected bill for manual entry, never a silently guessed value.</li>
 </ul>
 
 <!-- ================= STEP 10 ================= -->
