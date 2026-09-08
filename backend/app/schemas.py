@@ -26,6 +26,9 @@ class TransactionOut(BaseModel):
     items: Optional[str] = None  # JSON string, see models.py
     debit: float = 0.0
     credit: float = 0.0
+    bank_ledger: Optional[str] = None
+    tds_amount: float = 0.0
+    tds_ledger: Optional[str] = None
     balance: Optional[float] = None
     narration: Optional[str] = None
     approved_at: Optional[datetime.datetime] = None
@@ -93,6 +96,9 @@ class TransactionUpdate(BaseModel):
     status: Optional[str] = None
     debit: Optional[float] = None
     credit: Optional[float] = None
+    bank_ledger: Optional[str] = None
+    tds_amount: Optional[float] = None
+    tds_ledger: Optional[str] = None
     narration: Optional[str] = None
 
 

@@ -137,6 +137,37 @@ const CONFIG = {
     uploadLabel: "Upload a purchase bill photo/PDF, a bill-list Excel, or import a GSTR-2B B2B Excel file",
   },
   gstr2b: { docType: "GSTR2B", label: "GSTR-2B (Discount Notes)", accept: ".xlsx,.xls", uploadLabel: "Import GSTR-2B Excel file" },
+  receiptPayment: {
+    // No single fixed docType here — RECEIPT vs PAYMENT is picked by the
+    // user via the toggle rendered below (see the voucherType state in
+    // the component), then passed straight into api.uploadDocument.
+    docType: "RECEIPT",
+    label: "Receipt/Payment Register",
+    accept: ".xlsx,.xls",
+    uploadLabel:
+      "Upload your own fee/rent/salary/expense register Excel (any column names — party, date, amount, mode of payment, narration; Payment sheets can also add a TDS Amount / TDS Ledger column) — money in and money out both go through this same importer",
+  },
+  journal: {
+    docType: "JOURNAL",
+    label: "Journal Vouchers",
+    accept: ".xlsx,.xls",
+    uploadLabel:
+      "Upload a plain double-entry Excel with a Debit Ledger, Credit Ledger, Amount, Date, and (optional) Narration column — any column naming works, read straight from your sheet",
+  },
+  contra: {
+    docType: "CONTRA",
+    label: "Contra Vouchers",
+    accept: ".xlsx,.xls",
+    uploadLabel:
+      "Upload a cash/bank self-transfer Excel with a From Ledger, To Ledger, Amount, Date, and (optional) Narration column — e.g. cash deposited into a bank account, or funds moved between two bank accounts",
+  },
+  stockJournal: {
+    docType: "STOCK_JOURNAL",
+    label: "Stock Journal",
+    accept: ".xlsx,.xls",
+    uploadLabel:
+      "Upload an inventory-movement Excel with an Item, Quantity, and a From Godown and/or To Godown column (both = transfer, From only = consumption, To only = production) — Rate/Unit/Date/Narration optional",
+  },
   bank: {
     docType: "BANK",
     label: "Bank Statements",
@@ -148,11 +179,24 @@ const CONFIG = {
 export default function DocumentTypePage({ pageKey }) {
   const cfg = CONFIG[pageKey];
   const [documents, setDocuments] = useState([]);
+  // Only meaningful on the receiptPayment page — which of the two Excel-only
+  // voucher types this upload should be filed as. Nothing here is
+  // hardcoded to "Cash"/etc.: this only picks RECEIPT vs PAYMENT (i.e.
+  // money in vs money out); every ledger name (party, cash/bank mode) is
+  // still read straight from the user's own sheet columns, same as the
+  // parser already does for every other Excel import.
+  const [voucherType, setVoucherType] = useState("RECEIPT");
+
+  const isReceiptPayment = pageKey === "receiptPayment";
 
   const refresh = useCallback(async () => {
     const docs = await api.listDocuments();
-    setDocuments(docs.filter((d) => d.document_type === cfg.docType));
-  }, [cfg.docType]);
+    if (isReceiptPayment) {
+      setDocuments(docs.filter((d) => d.document_type === "RECEIPT" || d.document_type === "PAYMENT"));
+    } else {
+      setDocuments(docs.filter((d) => d.document_type === cfg.docType));
+    }
+  }, [cfg.docType, isReceiptPayment]);
 
   useEffect(() => {
     refresh();
@@ -182,6 +226,10 @@ export default function DocumentTypePage({ pageKey }) {
       }
     } else if (pageKey === "sales" && isExcel) {
       await api.uploadSalesExcel(file);
+    } else if (isReceiptPayment) {
+      // voucherType (RECEIPT = money in, PAYMENT = money out) is whatever
+      // the user picked in the toggle below — never hardcoded.
+      await api.uploadDocument(file, voucherType);
     } else {
       // Photos and PDFs (both Sales and Purchase) go through the general
       // document pipeline — PDFs are rasterized page-by-page server-side
@@ -201,6 +249,30 @@ export default function DocumentTypePage({ pageKey }) {
       <div className="bg-white rounded-xl border border-slate-200 p-5">
         <h2 className="font-semibold text-slate-900 mb-1">{cfg.label}</h2>
         <p className="text-sm text-slate-500 mb-4">{cfg.uploadLabel}</p>
+
+        {isReceiptPayment && (
+          <div className="mb-4 inline-flex rounded-lg border border-slate-300 overflow-hidden text-sm">
+            <button
+              type="button"
+              onClick={() => setVoucherType("RECEIPT")}
+              className={`px-3 py-1.5 font-medium ${
+                voucherType === "RECEIPT" ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              Receipt (money in)
+            </button>
+            <button
+              type="button"
+              onClick={() => setVoucherType("PAYMENT")}
+              className={`px-3 py-1.5 font-medium border-l border-slate-300 ${
+                voucherType === "PAYMENT" ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              Payment (money out)
+            </button>
+          </div>
+        )}
+
         <UploadBox
           accept={cfg.accept}
           label={cfg.uploadLabel}

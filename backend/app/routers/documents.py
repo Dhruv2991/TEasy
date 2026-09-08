@@ -118,8 +118,8 @@ def upload_document(
     db: Session = Depends(get_db),
 ):
     document_type = document_type.upper()
-    if document_type not in ("SALES", "PURCHASE"):
-        raise HTTPException(400, f"Unsupported document_type '{document_type}' (expected SALES or PURCHASE)")
+    if document_type not in ("SALES", "PURCHASE", "RECEIPT", "PAYMENT", "JOURNAL", "CONTRA", "STOCK_JOURNAL"):
+        raise HTTPException(400, f"Unsupported document_type '{document_type}' (expected SALES, PURCHASE, RECEIPT, PAYMENT, JOURNAL, CONTRA, or STOCK_JOURNAL)")
 
     ext = (os.path.splitext(file.filename)[1] or ".jpg").lower()
     allowed_ext = {".jpg", ".jpeg", ".png", ".webp", ".pdf", ".xlsx", ".xls"}
@@ -128,6 +128,12 @@ def upload_document(
             400,
             f"Unsupported file type '{ext}'. Upload a bill photo (.jpg/.png), a PDF invoice, "
             "or an Excel sheet of bills (.xlsx/.xls).",
+        )
+    if document_type in ("RECEIPT", "PAYMENT", "JOURNAL", "CONTRA", "STOCK_JOURNAL") and ext not in (".xlsx", ".xls"):
+        raise HTTPException(
+            400,
+            f"'{document_type}' uploads are Excel-only right now (a fee/rent/salary/journal "
+            "register sheet, not a photo) — please upload an .xlsx or .xls file.",
         )
 
     saved_name = f"{uuid.uuid4().hex}{ext}"
@@ -158,6 +164,124 @@ def upload_document(
     return doc
 
 
+def _process_ledger_excel_document(document_id: int, db: Session):
+    """General-users path for a Receipt, Payment, or Journal register: a
+    spreadsheet where each row is one transaction — a college's fee
+    collection, a landlord's rent-received log, a payroll sheet, a
+    donation register, or a plain two-ledger journal entry sheet. No GST,
+    no items — see simple_ledger_excel_parser.py."""
+    from ..extraction.simple_ledger_excel_parser import parse_ledger_excel, rows_to_transactions
+
+    doc = db.query(models.Document).get(document_id)
+    if doc is None:
+        return
+
+    try:
+        doc.status = "PROCESSING"
+        db.commit()
+
+        parsed_rows = parse_ledger_excel(doc.file_path)
+        rows = rows_to_transactions(parsed_rows, doc.document_type)
+    except ValueError as e:
+        doc.status = "FAILED"
+        db.commit()
+        _log(db, f"Excel parsing failed: {e}", document_id=doc.id)
+        return
+    except Exception as e:
+        doc.status = "FAILED"
+        db.commit()
+        _log(db, f"Excel parsing failed unexpectedly: {e}", document_id=doc.id)
+        return
+
+    _log(db, f"Parsed {len(rows)} {doc.document_type.lower()} row(s) from '{doc.file_name}'", document_id=doc.id)
+
+    for idx, row in enumerate(rows):
+        bill = models.DetectedBill(document_id=doc.id, crop_path=None, bbox=None, order_in_page=idx)
+        db.add(bill)
+        db.commit()
+        db.refresh(bill)
+
+        tx = models.Transaction(
+            bill_id=bill.id, type=row["type"], party=row["party"], date=row["date"],
+            invoice_number=row["invoice_number"], total_value=row["total_value"],
+            debit=row["debit"], credit=row["credit"], narration=row["narration"],
+            bank_ledger=row["bank_ledger"], confidence=row["confidence"], status="NEEDS_REVIEW",
+            tds_amount=row.get("tds_amount") or 0.0, tds_ledger=row.get("tds_ledger"),
+        )
+        db.add(tx)
+        db.commit()
+        db.refresh(tx)
+
+        tx.possible_duplicate = _is_duplicate_invoice(
+            db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id, taxable_value=tx.total_value
+        )
+        db.commit()
+        db.refresh(tx)
+
+        note = f"Row {idx + 1} (Excel, {doc.document_type}): {tx.party} — {tx.total_value}"
+        if tx.possible_duplicate:
+            note += f" | ⚠ POSSIBLE DUPLICATE reference '{tx.invoice_number}' for {tx.party}"
+        _log(db, note, document_id=doc.id, transaction_id=tx.id)
+
+    doc.status = "NEEDS_REVIEW"
+    db.commit()
+
+
+def _process_stock_journal_document(document_id: int, db: Session):
+    """Pure inventory-movement register: godown-to-godown transfers,
+    manufacturing consumption, or manufacturing production — one row per
+    movement, no ledger/GST involved. See stock_journal_excel_parser.py."""
+    import json as _json
+    from ..extraction.stock_journal_excel_parser import parse_stock_journal_excel, rows_to_transactions
+
+    doc = db.query(models.Document).get(document_id)
+    if doc is None:
+        return
+
+    try:
+        doc.status = "PROCESSING"
+        db.commit()
+
+        parsed_rows = parse_stock_journal_excel(doc.file_path)
+        rows = rows_to_transactions(parsed_rows)
+    except ValueError as e:
+        doc.status = "FAILED"
+        db.commit()
+        _log(db, f"Excel parsing failed: {e}", document_id=doc.id)
+        return
+    except Exception as e:
+        doc.status = "FAILED"
+        db.commit()
+        _log(db, f"Excel parsing failed unexpectedly: {e}", document_id=doc.id)
+        return
+
+    _log(db, f"Parsed {len(rows)} stock journal row(s) from '{doc.file_name}'", document_id=doc.id)
+
+    for idx, row in enumerate(rows):
+        bill = models.DetectedBill(document_id=doc.id, crop_path=None, bbox=None, order_in_page=idx)
+        db.add(bill)
+        db.commit()
+        db.refresh(bill)
+
+        item_name = row["items"][0]["name"] if row.get("items") else None
+        tx = models.Transaction(
+            bill_id=bill.id, type=row["type"], party=row["party"], date=row["date"],
+            invoice_number=row["invoice_number"], total_value=row["total_value"],
+            debit=row["debit"], credit=row["credit"], narration=row["narration"],
+            bank_ledger=row["bank_ledger"], confidence=row["confidence"], status="NEEDS_REVIEW",
+            items=_json.dumps(row["items"]) if row.get("items") else None,
+        )
+        db.add(tx)
+        db.commit()
+        db.refresh(tx)
+
+        note = f"Row {idx + 1} (Excel, Stock Journal): {item_name} — {row['party'] or '?'} → {row['bank_ledger'] or '?'}"
+        _log(db, note, document_id=doc.id, transaction_id=tx.id)
+
+    doc.status = "NEEDS_REVIEW"
+    db.commit()
+
+
 def _process_excel_document(document_id: int, db: Session):
     """General-users path: a spreadsheet where each row is one bill (their
     own sales/purchase register), rather than a photo. No AI/OCR involved —
@@ -169,6 +293,12 @@ def _process_excel_document(document_id: int, db: Session):
     doc = db.query(models.Document).get(document_id)
     if doc is None:
         return
+
+    if doc.document_type in ("RECEIPT", "PAYMENT", "JOURNAL", "CONTRA"):
+        return _process_ledger_excel_document(document_id, db)
+
+    if doc.document_type == "STOCK_JOURNAL":
+        return _process_stock_journal_document(document_id, db)
 
     try:
         doc.status = "PROCESSING"

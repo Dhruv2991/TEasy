@@ -137,7 +137,22 @@ class Transaction(Base):
     # is non-zero per row, mirroring the statement itself.
     debit = Column(Float, default=0.0)
     credit = Column(Float, default=0.0)
+    # Per-row cash/bank ledger name for RECEIPT/PAYMENT (and BANK) rows —
+    # e.g. "Cash", "HDFC Bank", derived from a sheet's "Mode of Payment"
+    # column. Falls back to the global config bank_ledger when null (see
+    # routers/tally.py), same as before this column existed.
+    bank_ledger = Column(String, nullable=True)
     balance = Column(Float, nullable=True)  # BANK rows only — the statement's running balance after this row; used for reconciliation's balance cross-check and for duplicate-upload detection
+    # TDS deducted on a PAYMENT row (salary/rent/professional-fee payments
+    # that legally require withholding tax) — e.g. tds_amount=1000 on a
+    # gross tds-liable amount of 10000 means only 9000 actually leaves the
+    # cash/bank ledger, with the other 1000 credited to tds_ledger (a
+    # "Duties & Taxes" TDS-payable ledger) instead. Both null/0 for every
+    # non-Payment row and for any Payment with no TDS involved — this never
+    # forces a 3-ledger split where a 2-ledger one (existing behaviour) is
+    # correct. See voucher_builder.build_ledger_voucher_xml.
+    tds_amount = Column(Float, default=0.0)
+    tds_ledger = Column(String, nullable=True)
     # Populated where the source actually carries a GSTIN (GSTR-2B purchase
     # imports and credit/debit notes) — plain OCR'd sales/purchase photos
     # and hand-entered rows won't have one, so party_state stays null for

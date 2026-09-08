@@ -16,6 +16,22 @@ class BulkActionRequest(BaseModel):
     ids: list[int]
 
 
+# Fields safe to mass-assign a single value to across many transactions at
+# once from Review & Approve's bulk toolbar. Deliberately an allowlist, not
+# every column on the model — things like `type`, `total_value`, `status`
+# have per-row meaning that a single blanket value would corrupt, whereas
+# these are exactly the fields real users repeatedly need to fix in bulk
+# after a big import (e.g. "every row in this file should post to HDFC
+# Bank", or "these salary rows all need the same TDS ledger").
+BULK_EDITABLE_FIELDS = {"party", "bank_ledger", "tds_ledger", "tds_amount", "narration"}
+
+
+class BulkFieldUpdateRequest(BaseModel):
+    ids: list[int]
+    field: str
+    value: str | float | None = None
+
+
 def _maybe_reconcile(db: Session) -> None:
     """Re-runs bank<->invoice reconciliation after a SALES/PURCHASE approval
     — a newly-approved invoice is a new candidate that might resolve a bank
@@ -373,6 +389,48 @@ def bulk_delete_transactions(
 
     db.commit()
     return {"status": "success", "deleted_count": deleted_count}
+
+
+@router.post("/bulk-update-field")
+def bulk_update_field(payload: BulkFieldUpdateRequest, db: Session = Depends(get_db)):
+    """
+    Applies one value to one field across many transactions at once — e.g.
+    "set the Cash/Bank ledger on these 40 selected rows to 'HDFC Bank'"
+    instead of opening each row's edit form individually. Same underlying
+    write as the normal PATCH /transactions/{id} used for a single-row
+    edit, just looped, so nothing downstream (Tally push, review-status
+    logic) needs to know this happened in bulk.
+    """
+    if payload.field not in BULK_EDITABLE_FIELDS:
+        raise HTTPException(
+            400,
+            f"Field '{payload.field}' can't be bulk-edited. Allowed: {', '.join(sorted(BULK_EDITABLE_FIELDS))}",
+        )
+    if not payload.ids:
+        return {"status": "success", "updated_count": 0}
+
+    txs = (
+        db.query(models.Transaction)
+        .filter(models.Transaction.id.in_(payload.ids))
+        .all()
+    )
+
+    value = payload.value
+    if payload.field == "tds_amount":
+        # Blank/omitted means "no TDS on these rows" — 0.0, not None, since
+        # the column is a non-nullable Float with that default.
+        value = float(value) if value not in (None, "") else 0.0
+
+    updated_ids = []
+    for tx in txs:
+        setattr(tx, payload.field, value)
+        updated_ids.append(tx.id)
+
+    db.add(models.AuditLog(
+        message=f"Bulk-set '{payload.field}' to {value!r} on {len(updated_ids)} transaction(s)",
+    ))
+    db.commit()
+    return {"status": "success", "updated_count": len(updated_ids), "updated_ids": updated_ids}
 
 
 # ------------------------------------------------------------------

@@ -178,7 +178,9 @@ def push_approved_transactions(
             "debit": getattr(tx, "debit", 0.0),
             "credit": getattr(tx, "credit", 0.0),
             "narration": getattr(tx, "narration", None),
-            "bank_ledger": config.get("bank_ledger"),
+            "bank_ledger": getattr(tx, "bank_ledger", None) or config.get("bank_ledger"),
+            "tds_amount": getattr(tx, "tds_amount", 0.0) or 0.0,
+            "tds_ledger": getattr(tx, "tds_ledger", None),
         }
         try:
             xml = build_voucher_envelope(tx_dict, config)
@@ -268,7 +270,9 @@ def push_single_transaction(transaction_id: int, db: Session = Depends(get_db)):
         "debit": getattr(tx, "debit", 0.0),
         "credit": getattr(tx, "credit", 0.0),
         "narration": getattr(tx, "narration", None),
-        "bank_ledger": config.get("bank_ledger"),
+        "bank_ledger": getattr(tx, "bank_ledger", None) or config.get("bank_ledger"),
+        "tds_amount": getattr(tx, "tds_amount", 0.0) or 0.0,
+        "tds_ledger": getattr(tx, "tds_ledger", None),
     }
     try:
         xml = build_voucher_envelope(tx_dict, config)

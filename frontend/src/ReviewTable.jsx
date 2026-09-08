@@ -231,6 +231,13 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
   if (!tx) return null;
 
   const isBank = tx.type === "BANK";
+  // RECEIPT/PAYMENT rows (from a Receipt/Payment register upload) are a
+  // plain two-ledger movement, same shape as a BANK row — no GST/taxable
+  // value math applies to them either, so they share the debit/credit
+  // layout below rather than the GST one. isBank stays BANK-only because
+  // reconciliation (matching against sales/purchase invoices) only makes
+  // sense for actual bank-statement rows.
+  const isLedgerRow = isBank || ["RECEIPT", "PAYMENT", "JOURNAL", "CONTRA"].includes(tx.type);
 
   const startEdit = () => {
     setForm({ ...tx, date: toIsoDate(tx.date) });
@@ -315,7 +322,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
     (Number(form.sgst) || 0) +
     (Number(form.igst) || 0);
   const computedTotal = roundRupee((Number(form.taxable_value) || 0) + taxSum);
-  const reconciled = isBank
+  const reconciled = isLedgerRow
     ? true // a bank row's "total" is just debit or credit itself — nothing to reconcile against
     : Math.abs(computedTotal - (Number(form.total_value) || 0)) <= 1.5;
 
@@ -366,7 +373,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
               className="border border-slate-300 rounded px-2 py-1 text-[15.5px] w-36"
               value={form.party || ""}
               onChange={(e) => setForm({ ...form, party: e.target.value })}
-              placeholder={isBank ? "Counter-party ledger" : ""}
+              placeholder={isLedgerRow ? "Counter-party ledger" : ""}
             />
           </td>
           <td className="p-3">
@@ -386,10 +393,10 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
               onChange={(e) =>
                 setForm({ ...form, invoice_number: e.target.value })
               }
-              placeholder={isBank ? "Chq/Ref no" : ""}
+              placeholder={isLedgerRow ? "Chq/Ref no" : ""}
             />
           </td>
-          {isBank ? (
+          {isLedgerRow ? (
             <td className="p-3">
               <div className="flex gap-2">
                 <div>
@@ -418,6 +425,48 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
                 onChange={(e) => setForm({ ...form, narration: e.target.value })}
                 placeholder="Narration"
               />
+              {/* Cash/bank ledger for this row. Read from the sheet's "mode of
+                  payment" column when present; otherwise this is blank here and
+                  Tally push falls back to the Cash/Bank ledger set in General
+                  Settings. Editable so nothing is silently assumed — if the
+                  register didn't have a mode column, fill it in per row. */}
+              <input
+                type="text"
+                className="mt-1.5 border border-slate-300 rounded px-2 py-1 text-[13px] w-full"
+                value={form.bank_ledger || ""}
+                onChange={(e) => setForm({ ...form, bank_ledger: e.target.value })}
+                placeholder={
+                  tx.type === "JOURNAL"
+                    ? "Credit ledger name"
+                    : tx.type === "CONTRA"
+                    ? "From ledger (source cash/bank account)"
+                    : "Cash/bank ledger (blank = use default from settings)"
+                }
+              />
+              {/* TDS split — Payment rows only. If tds_amount is set, the
+                  full amount is still debited to the party/expense ledger
+                  (that's the real liability), but only (amount - tds_amount)
+                  is credited to cash/bank — the rest goes to tds_ledger
+                  instead, e.g. "TDS Payable @ 194C". Leave both blank for a
+                  plain payment with no tax withheld (the normal case). */}
+              {tx.type === "PAYMENT" && (
+                <div className="flex gap-2 mt-1.5">
+                  <input
+                    type="number"
+                    className="border border-slate-300 rounded px-2 py-1 text-[13px] w-24"
+                    value={form.tds_amount || ""}
+                    onChange={(e) => setForm({ ...form, tds_amount: e.target.value })}
+                    placeholder="TDS ₹"
+                  />
+                  <input
+                    type="text"
+                    className="border border-slate-300 rounded px-2 py-1 text-[13px] flex-1"
+                    value={form.tds_ledger || ""}
+                    onChange={(e) => setForm({ ...form, tds_ledger: e.target.value })}
+                    placeholder="TDS ledger (e.g. TDS Payable)"
+                  />
+                </div>
+              )}
             </td>
           ) : (
             <td className="p-3">
@@ -430,7 +479,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
               />
             </td>
           )}
-          {isBank ? (
+          {isLedgerRow ? (
             <td className="p-3 text-[15.5px] text-slate-400">—</td>
           ) : (
             <td className="p-3">
@@ -482,7 +531,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
               );
             })()}
           </td>
-          {isBank ? (
+          {isLedgerRow ? (
             <td className="p-3 text-[15.5px]">
               {tx.credit > 0 ? (
                 <span className="font-medium text-emerald-700">Cr ₹{formatMoney(tx.credit)}</span>
@@ -494,6 +543,14 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
                   {tx.narration}
                 </div>
               )}
+              <div className="text-[11px] text-slate-400 max-w-[160px] truncate" title="Cash/bank ledger this will post against in Tally">
+                {tx.bank_ledger || (tx.type === "JOURNAL" ? "(missing credit ledger)" : "(default ledger from settings)")}
+              </div>
+              {tx.type === "PAYMENT" && Number(tx.tds_amount) > 0 && (
+                <div className="text-[11px] text-amber-700 max-w-[160px] truncate" title="TDS withheld from this payment">
+                  TDS ₹{formatMoney(tx.tds_amount)} → {tx.tds_ledger || "(default TDS ledger)"}
+                </div>
+              )}
             </td>
           ) : (
             <td className="p-3 text-[15.5px] font-medium text-slate-900">
@@ -501,7 +558,7 @@ function TransactionRow({ bill, onChanged, isSelected, onSelect }) {
             </td>
           )}
           <td className="p-3 text-[15.5px] text-slate-600">
-            {isBank ? (
+            {isLedgerRow ? (
               <span className="text-slate-400">—</span>
             ) : (
               <>
@@ -619,6 +676,7 @@ function downloadCsv(rows, filename) {
     "GST %",
     "Debit",
     "Credit",
+    "Cash/Bank Ledger",
     "Narration",
     "Confidence",
     "Status",
@@ -644,6 +702,7 @@ function downloadCsv(rows, filename) {
         tx.gst_rate,
         tx.debit,
         tx.credit,
+        tx.bank_ledger,
         tx.narration,
         tx.confidence != null ? Math.round(tx.confidence * 100) + "%" : "",
         tx.status,
@@ -668,6 +727,8 @@ function downloadCsv(rows, filename) {
 export default function ReviewTable({ bills, onChanged }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkField, setBulkField] = useState("bank_ledger");
+  const [bulkValue, setBulkValue] = useState("");
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState("asc");
   const [searchQuery, setSearchQuery] = useState("");
@@ -686,6 +747,11 @@ export default function ReviewTable({ bills, onChanged }) {
   }
 
   const isBankTable = bills.some((b) => b.transaction?.type === "BANK");
+  // Broader than isBankTable: also true for a Receipt/Payment register
+  // table, which shares the same debit/credit column layout (no GST).
+  const isLedgerTable = bills.some((b) =>
+    ["BANK", "RECEIPT", "PAYMENT", "JOURNAL", "CONTRA"].includes(b.transaction?.type)
+  );
 
   const statusesPresent = Array.from(
     new Set(bills.map((b) => b.transaction?.status).filter(Boolean))
@@ -815,6 +881,28 @@ export default function ReviewTable({ bills, onChanged }) {
       onChanged();
     } catch (e) {
       alert(`Bulk reject failed: ${e.message}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const BULK_EDIT_FIELDS = [
+    { value: "bank_ledger", label: "Cash/Bank Ledger" },
+    { value: "party", label: "Party" },
+    { value: "tds_ledger", label: "TDS Ledger" },
+    { value: "tds_amount", label: "TDS Amount" },
+    { value: "narration", label: "Narration" },
+  ];
+
+  const handleBulkFieldApply = async () => {
+    if (!selectedIds.length) return;
+    setBulkBusy(true);
+    try {
+      await api.bulkUpdateField(selectedIds, bulkField, bulkValue);
+      setBulkValue("");
+      onChanged();
+    } catch (e) {
+      alert(`Bulk update failed: ${e.message}`);
     } finally {
       setBulkBusy(false);
     }
@@ -980,6 +1068,36 @@ export default function ReviewTable({ bills, onChanged }) {
         </div>
       </div>
 
+      {/* Bulk field-edit: apply one value to one field across every
+          selected row at once — e.g. set the Cash/Bank ledger on 40
+          imported rows in one go instead of editing each row by hand. */}
+      <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-4 py-2.5 rounded-xl text-[15.5px] flex-wrap">
+        <span className="text-slate-500 text-[13px] font-medium shrink-0">Set for selected:</span>
+        <select
+          value={bulkField}
+          onChange={(e) => setBulkField(e.target.value)}
+          className="text-[13px] border border-slate-300 rounded-lg px-2 py-1.5 bg-white"
+        >
+          {BULK_EDIT_FIELDS.map((f) => (
+            <option key={f.value} value={f.value}>{f.label}</option>
+          ))}
+        </select>
+        <input
+          type={bulkField === "tds_amount" ? "number" : "text"}
+          value={bulkValue}
+          onChange={(e) => setBulkValue(e.target.value)}
+          placeholder={bulkField === "tds_amount" ? "0.00 (blank = no TDS)" : "New value…"}
+          className="text-[13px] border border-slate-300 rounded-lg px-2.5 py-1.5 flex-1 min-w-[160px]"
+        />
+        <button
+          disabled={!selectedIds.length || bulkBusy}
+          onClick={handleBulkFieldApply}
+          className="bg-slate-900 text-white text-[13px] font-medium px-3 py-1.5 rounded-lg hover:bg-slate-800 disabled:opacity-40 transition-colors shrink-0"
+        >
+          Apply to {selectedIds.length} row{selectedIds.length === 1 ? "" : "s"}
+        </button>
+      </div>
+
       {reconcileResult && (
         <div className="bg-white border border-slate-200 rounded-xl p-3 text-[15.5px] text-slate-600">
           Reconciled: <span className="font-medium text-emerald-700">{reconcileResult.matched} matched</span>
@@ -1020,11 +1138,11 @@ export default function ReviewTable({ bills, onChanged }) {
                 />
               </th>
               <th className="p-3">Bill</th>
-              <SortHeader colKey="party">{isBankTable ? "Counter-party" : "Party"}</SortHeader>
+              <SortHeader colKey="party">{isLedgerTable ? "Counter-party" : "Party"}</SortHeader>
               <SortHeader colKey="date">Date</SortHeader>
-              <SortHeader colKey="invoice_number">{isBankTable ? "Chq/Ref #" : "Invoice #"}</SortHeader>
-              <SortHeader colKey="total_value">{isBankTable ? "Debit / Credit" : "Total"}</SortHeader>
-              <SortHeader colKey="gst_rate">{isBankTable ? "—" : "GST %"}</SortHeader>
+              <SortHeader colKey="invoice_number">{isLedgerTable ? "Chq/Ref #" : "Invoice #"}</SortHeader>
+              <SortHeader colKey="total_value">{isLedgerTable ? "Debit / Credit" : "Total"}</SortHeader>
+              <SortHeader colKey="gst_rate">{isLedgerTable ? "—" : "GST %"}</SortHeader>
               <SortHeader colKey="confidence">Confidence</SortHeader>
               <SortHeader colKey="status">Status</SortHeader>
               <th className="p-3">Reconciled</th>
@@ -1049,7 +1167,7 @@ export default function ReviewTable({ bills, onChanged }) {
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-slate-200 bg-slate-50 text-[15.5px] font-semibold text-slate-700">
-              {isBankTable ? (
+              {isLedgerTable ? (
                 <>
                   <td className="p-3" colSpan={5}>
                     Totals ({sortedBills.length} row{sortedBills.length === 1 ? "" : "s"})

@@ -200,6 +200,21 @@ def extract_purchase_bill_with_ai(image_path: str) -> dict:
     return extract_bill_with_ai(image_path, prompt=PURCHASE_EXTRACTION_PROMPT)
 
 
+def map_ledger_excel_headers(grid: list[list]) -> dict:
+    """Gemini counterpart to groq_vision.map_ledger_excel_headers — identical
+    prompt/contract, text-only (no image part)."""
+    from .groq_vision import LEDGER_HEADER_MAP_CANONICAL_FIELDS, LEDGER_HEADER_MAP_PROMPT_TEMPLATE
+
+    prompt = LEDGER_HEADER_MAP_PROMPT_TEMPLATE.format(
+        fields=LEDGER_HEADER_MAP_CANONICAL_FIELDS, grid=_grid_to_text(grid)
+    )
+    content = _post_text_only(prompt, max_tokens=1000)
+    try:
+        return _extract_json(content)
+    except (json.JSONDecodeError, KeyError, IndexError) as e:
+        raise RuntimeError(f"Could not parse Gemini ledger header-mapping response as JSON: {e}. Raw: {content[:300]}")
+
+
 def map_excel_headers(grid: list[list]) -> dict:
     """Gemini counterpart to groq_vision.map_excel_headers — identical
     prompt/contract, text-only (no image part)."""

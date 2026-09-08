@@ -93,6 +93,9 @@ def run_lightweight_migrations():
         "party_gstin": "VARCHAR",
         "party_state": "VARCHAR",
         "company_id": "INTEGER",
+        "bank_ledger": "VARCHAR",
+        "tds_amount": "FLOAT DEFAULT 0.0",
+        "tds_ledger": "VARCHAR",
     }
     with engine.begin() as conn:
         for col_name, col_def in additions.items():

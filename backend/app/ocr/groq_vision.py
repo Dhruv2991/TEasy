@@ -37,43 +37,45 @@ def _current_model() -> str:
 # `_current_key()` for anything that needs the live value.
 GROQ_API_KEY = _current_key()
 
-SALES_EXTRACTION_PROMPT = """You are an extremely careful accounting data-entry system reading ONE CROP from a handwritten Indian sales bill-book page (Sarvotham Traders bill-book format). The original page contains FOUR separate bills arranged 2x2, separated by dashed/perforated lines. This image is already cropped to exactly ONE bill. Never read handwriting from another quadrant.
+SALES_EXTRACTION_PROMPT = """You are an extremely careful accounting data-entry system reading ONE photo/crop of a sales bill or invoice issued BY this business TO a customer. This could be from ANY kind of business — retail shop, wholesaler, trader, services firm, restaurant, workshop, distributor, etc. — and the bill could be:
+  - A fully printed/typed tax invoice from any billing software.
+  - A handwritten bill-book / khata-style bill (single or multi-bill-per-page layout).
+  - A mix of printed letterhead with handwritten figures filled in.
+  - A cash-memo style bill with no formal invoice number.
 
-Your job is transcription, not estimation. A wrong number is worse than a missing number.
+Do not assume any specific template, business name, ink color, or field position. Read what is actually on THIS bill. Your job is transcription, not estimation — a wrong number is worse than a missing number (null).
 
-FIELD MAP:
+FIELD MAP — search the whole image for each of these, they can appear anywhere depending on the bill's layout:
 
-1. party: Do NOT attempt to read the "Sri" line at all — this bill book is always used for cash sales and that field is essentially always left blank. Always return "party": "Cash" without spending any visual attention searching that line.
+1. party: The CUSTOMER / buyer name — usually labeled "Sri", "M/s", "Bill to", "Buyer", "Customer Name", or similar, near the top. If the bill is a walk-in/cash sale with no customer name written or printed anywhere, return "Cash" — but only after actually checking, never assume it by default.
 
-2. invoice_number: Printed label is "No. A" in the top-left area, immediately followed by a handwritten number WRITTEN IN RED INK — this red color is the single most reliable way to find the right number, since every other handwritten figure on this bill is in blue/black ink. Read that red handwritten number character-by-character, then return it WITH the "A" prefix attached, e.g. if the red digits read "2406", return "A2406" (not just "2406", not "No. A2406"). Do NOT use the V.No. field (bottom-left, usually blank) — that is a different field entirely. If the red digits are genuinely illegible, return null rather than guessing.
+2. invoice_number: Look for a label like "No.", "Bill No.", "Invoice No.", "Inv No." — read the value next to it exactly as written, including any letter prefix (e.g. "A2406", "INV-1042"). If the bill uses a distinct ink color (e.g. red) for the handwritten number versus other black/blue handwriting, that is usually the invoice number and a strong visual cue — use it if present, but don't assume it always is. If genuinely illegible or absent, return null rather than guessing.
 
-3. date: The printed "Date:" label sits in the SAME ROW as "No. A", on the opposite (right) side of that row. Read the handwritten date immediately after "Date:". Return YYYY-MM-DD. These bills are dated in 2026 — a date written as "13/8/26" means 13 August 2026 → "2026-08-13". If unclear, return null.
+3. date: Look for "Date:" near the invoice number/header. Read the handwritten or printed date and return YYYY-MM-DD. If the year is abbreviated (e.g. "13/8/26"), infer the full year from context (bills are typically dated in the current or very recent year); if truly ambiguous, return null.
 
-4. taxable_value: In the bottom-left summary box, the FIRST/upper "Total" row (immediately below the boxed item table, BEFORE CGST/SGST). This is a clear multi-digit handwritten number, isolated in its own row — read it carefully digit-by-digit.
+4. taxable_value: The subtotal / taxable amount BEFORE tax — usually the first "Total" figure appearing above the CGST/SGST/IGST rows in the summary box, or a "Subtotal"/"Taxable Value" row in a printed invoice's tax table.
 
-5. GST amounts — READ THE RATE, THEN CALCULATE:
-   The printed labels read "CGST ___%" and "SGST ___%" — the blank is filled with a small handwritten number (typically a single or double digit, e.g. "6", "9"). This percentage figure is much easier to read reliably than the corresponding handwritten rupee amount beside it, so:
-   a. Read cgst_rate_percent and sgst_rate_percent as the handwritten numbers filled into those two blanks (they are usually equal to each other, e.g. both 6, or both 9).
-   b. Calculate: cgst = round(taxable_value * cgst_rate_percent / 100, 2), sgst = round(taxable_value * sgst_rate_percent / 100, 2).
-   c. Also look at the handwritten rupee amount actually written in the Amount column beside "CGST __%" and "SGST __%". If it is legible and clearly does NOT match your calculated cgst/sgst (more than a few rupees off), do not silently override your calculation — instead keep the calculated value as authoritative but say so explicitly in "notes" (e.g. "CGST written as 872 in amount column, matches calculated 6% of 14536 exactly" or "written amount looks like 850 but calculated 6% gives 872 — used calculated value").
-   d. igst: this bill format is always intra-state (CGST+SGST), so igst is always 0 unless you see an explicit "IGST" label instead of CGST/SGST.
-   e. gst_rate: cgst_rate_percent + sgst_rate_percent (e.g. 6 + 6 = 12).
+5. GST amounts — read the rate(s) actually present, then calculate:
+   a. Identify which tax structure this bill uses: CGST+SGST (intra-state), IGST (inter-state), or no GST at all (non-GST bill, common for very small businesses/unregistered sellers — this is valid, don't invent a rate).
+   b. Read cgst_rate_percent / sgst_rate_percent / igst_rate_percent wherever printed or handwritten (e.g. "CGST 6%", "SGST 6%", "IGST 12%").
+   c. Calculate the amounts as taxable_value * rate / 100, rounded to 2 decimals.
+   d. If a rupee amount is also written/printed next to the rate and it clearly disagrees with your calculation by more than a few rupees, keep the calculated value as authoritative but say so explicitly in "notes".
+   e. gst_rate: the combined GST rate (cgst_rate_percent + sgst_rate_percent, or igst_rate_percent alone), 0 if no GST on this bill.
+   f. Multiple line items can carry different GST rates on one bill — if so, use the blended/weighted total across all lines for gst_rate, and sum the CGST/SGST/IGST amounts across all lines for cgst/sgst/igst. Mention in "notes" if more than one rate was present.
 
-6. total_value: Calculate as taxable_value + cgst + sgst (+ igst if applicable). Cross-check against the bottom "Total" row in the summary box (the final total, after tax) if it's legible — if it disagrees with your calculation by more than a rounding difference, say so in "notes" but still return your calculated total_value as authoritative, since it's derived from the more-legible taxable_value and rate fields rather than a second handwritten total figure.
+6. total_value: Calculate as taxable_value + cgst + sgst + igst. Cross-check against any final "Total"/"Grand Total"/"Amount Payable" figure on the bill, and against an "Amount in words" line if present — if they disagree by more than a rounding difference, trust your calculated total_value (since it's derived from the more-legible taxable_value and rate fields) but say so in "notes".
 
-IMPORTANT VISUAL PROCEDURE:
-- First inspect the whole crop to understand the bill layout and confirm which quadrant you're reading.
-- Locate the RED handwritten invoice number first — it's the most visually distinct element on the page.
-- Then read the date on the same row.
-- Then read taxable_value (upper Total) and the CGST%/SGST% figures.
-- Distinguish 0/6, 1/7, 3/8, 4/9 and 5/6 carefully in every handwritten digit.
-- Do not copy numbers from GSTIN, phone numbers, V.No, HSN, or A/c No. fields.
+VISUAL PROCEDURE:
+- First inspect the whole image to understand what kind of bill this is (printed invoice vs handwritten bill-book vs cash memo) before extracting anything.
+- If the image contains more than one bill (e.g. a multi-up bill-book page), extract only the bill this crop is meant to represent — mention in "notes" if you had to guess which one.
+- Distinguish visually similar digits carefully in any handwriting: 0/6, 1/7, 3/8, 4/9, 5/6.
+- Do not copy numbers from GSTIN, phone numbers, PO numbers, HSN codes, or account numbers into invoice_number or the amount fields.
 
 Return ONLY this JSON object:
 {
-  "party": "Cash",
+  "party": "customer name, or 'Cash' only if genuinely no name is present",
   "date": "YYYY-MM-DD or null",
-  "invoice_number": "A-prefixed invoice number read from the RED handwriting, or null",
+  "invoice_number": "value read exactly as written/printed, or null",
   "taxable_value": number or null,
   "gst_rate": number or null,
   "cgst": number or null,
@@ -81,12 +83,12 @@ Return ONLY this JSON object:
   "igst": number or null,
   "total_value": number or null,
   "confidence": number from 0 to 1,
-  "notes": "specific ambiguity, if any, including any written-vs-calculated GST mismatch"
+  "notes": "specific ambiguity, if any, including any written-vs-calculated mismatch, multiple GST rates, or which bill was picked from a multi-bill page"
 }
 
-NO-GUESSING RULES (still apply to invoice_number, date, and taxable_value):
-- Never guess a digit you can't clearly distinguish — return null for that field instead.
-- If the crop is blurry, incomplete, contains more than one bill, or the red invoice number cannot be read, lower confidence and explain why in notes.
+NO-GUESSING RULES:
+- Never guess a digit or name you can't clearly read — return null for that field instead.
+- If the image is blurry, incomplete, upside down, or not actually a sales bill, lower confidence sharply and explain why in notes.
 - Do not claim 100% confidence. The final application performs a deterministic arithmetic check before anything can be approved for Tally.
 """
 
@@ -327,6 +329,7 @@ def extract_purchase_bill_with_ai(image_path: str) -> dict:
 
 HEADER_MAP_CANONICAL_FIELDS = """
 - party: the customer (Sales) or supplier (Purchase) ledger/name column
+- party_gstin: the customer's or supplier's GSTIN column, if present
 - date: the invoice/voucher date column
 - invoice_number: the invoice/bill/voucher number column
 - amount: a per-line taxable value / amount column (before tax) — only set this if there is a SINGLE flat amount column; leave it null if the sheet instead uses several per-GST-rate columns (see rate_buckets below)
@@ -340,6 +343,8 @@ HEADER_MAP_CANONICAL_FIELDS = """
 - hsn: HSN/SAC code column
 - round_off: a rounding-adjustment column
 - vch_type: a voucher-type column (Sales/Purchase/Credit Note/...), if present
+- from_godown: for a stock-transfer/consumption sheet, the source godown/warehouse/location column
+- to_godown: for a stock-transfer/production sheet, the destination godown/warehouse/location column
 """
 
 
@@ -367,7 +372,7 @@ Here is the sheet — each row shows every column's 1-based column number and it
 Return ONLY this JSON object, nothing else:
 {{
   "header_row": <1-based row number of the actual column-header row>,
-  "field_columns": {{"party": <col number or null>, "date": <col number or null>, "invoice_number": <col number or null>, "amount": <col number or null>, "gst_rate": <col number or null>, "cgst_amount": <col number or null>, "sgst_amount": <col number or null>, "igst_amount": <col number or null>, "total_value": <col number or null>, "stock_item": <col number or null>, "quantity": <col number or null>, "rate": <col number or null>, "unit": <col number or null>, "hsn": <col number or null>, "round_off": <col number or null>, "vch_type": <col number or null>}},
+  "field_columns": {{"party": <col number or null>, "party_gstin": <col number or null>, "date": <col number or null>, "invoice_number": <col number or null>, "amount": <col number or null>, "gst_rate": <col number or null>, "cgst_amount": <col number or null>, "sgst_amount": <col number or null>, "igst_amount": <col number or null>, "total_value": <col number or null>, "stock_item": <col number or null>, "quantity": <col number or null>, "rate": <col number or null>, "unit": <col number or null>, "hsn": <col number or null>, "round_off": <col number or null>, "vch_type": <col number or null>, "from_godown": <col number or null>, "to_godown": <col number or null>}},
   "rate_buckets": [{{"rate": <number>, "value_col": <col number or null>, "cgst_col": <col number or null>, "sgst_col": <col number or null>, "igst_col": <col number or null>}}],
   "confidence": <0 to 1>,
   "notes": "anything ambiguous about this mapping"
@@ -379,6 +384,110 @@ Rules:
 - amount MUST be null if rate_buckets is non-empty, and vice versa — don't double-map the same money into both.
 - Do not invent columns that don't exist in the sheet.
 """
+
+
+# --- Ledger (Receipt/Payment register) header mapping ---------------------
+# Same idea as map_excel_headers above, but for the domain-agnostic
+# money-in/money-out register uploaded on the Receipt/Payment page (see
+# extraction/simple_ledger_excel_parser.py). Used only when that parser's
+# deterministic header-alias matching can't confidently find a party
+# column + an amount column — i.e. an unfamiliar column naming scheme, not
+# one of the aliases already in HEADER_VARIANTS there.
+LEDGER_HEADER_MAP_CANONICAL_FIELDS = """
+- party: who the money was received from (Receipt), paid to (Payment), the ledger to be DEBITED (Journal), or the ledger RECEIVING funds (Contra transfer)
+- date: the transaction date column
+- invoice_number: a receipt/reference/slip/cheque/transaction-ID number column, if present
+- amount: the money amount column for this transaction
+- mode: how the money moved — Cash/UPI/NEFT/Cheque/Bank Transfer/Card/etc — the ledger to be CREDITED (Journal), or the ledger funds are transferred OUT OF (Contra transfer)
+- narration: a purpose/particulars/remarks/description column, if present
+- direction: a column that says whether EACH ROW individually is money coming IN or going OUT (e.g. a "Type" column with values like Inflow/Outflow, Credit/Debit, Received/Paid, Deposit/Withdrawal) — only set this if the sheet actually mixes both directions row-by-row; leave it null if the whole sheet is one direction (the user already tells the app that separately)
+- tds_amount: on a Payment sheet only, a column giving the TDS (tax deducted at source) withheld from this payment, if the sheet tracks that separately from the gross amount
+- tds_ledger: on a Payment sheet only, a column naming which TDS-payable ledger the withheld tax should be credited to, if present
+"""
+
+LEDGER_HEADER_MAP_PROMPT_TEMPLATE = """You are helping an accounting import tool understand an unfamiliar Excel/CSV layout for a general money-in/money-out register — a college's fee-collection sheet, a landlord's rent log, a company's salary/expense sheet, a donation register, anything with a party, a date, and an amount, no GST/item math involved. Column headers can be worded in many ways ("Student Name" vs "Payer" vs "Received From", "Fee Amount" vs "Amount Paid" vs "Net Amount", etc.) — your job is to map each column to ONE canonical field name, based on the header text and the sample data underneath it.
+
+Canonical field names available:
+{fields}
+
+Here is the sheet — each row shows every column's 1-based column number and its value for the first several rows (the first row(s) are likely the header, or there may be a couple of blank/title rows above the real header — figure out which row number is the actual header row):
+
+{grid}
+
+Return ONLY this JSON object, nothing else:
+{{
+  "header_row": <1-based row number of the actual column-header row>,
+  "field_columns": {{"party": <col number or null>, "date": <col number or null>, "invoice_number": <col number or null>, "amount": <col number or null>, "mode": <col number or null>, "narration": <col number or null>, "direction": <col number or null>, "tds_amount": <col number or null>, "tds_ledger": <col number or null>}},
+  "direction_values": {{"receipt_values": ["<value(s) in the direction column that mean money IN, exactly as they appear in the sheet>"], "payment_values": ["<value(s) that mean money OUT, exactly as they appear>"]}},
+  "confidence": <0 to 1>,
+  "notes": "anything ambiguous about this mapping"
+}}
+
+Rules:
+- Only map a column if you're reasonably confident from its header text and/or sample values — leave it null rather than guessing.
+- A column can only be used for one field.
+- party and amount are required — if you can't confidently find both, set them null and explain why in notes rather than guessing.
+- Only fill "direction_values" if you also mapped a "direction" column; otherwise leave both lists empty.
+- Do not invent columns that don't exist in the sheet.
+"""
+
+
+def map_ledger_excel_headers(grid: list[list]) -> dict:
+    """
+    Groq counterpart used by simple_ledger_excel_parser.py's AI fallback.
+    Same contract as map_excel_headers (raises RuntimeError on missing key
+    / API failure), just a different prompt/canonical-field set tuned for
+    a Receipt/Payment register instead of a GST bill register.
+    """
+    api_key = _current_key()
+    if not api_key:
+        raise RuntimeError(
+            "Groq API key is not set. Get a free key at https://console.groq.com/keys "
+            "and add it on the Settings page in the app."
+        )
+
+    prompt = LEDGER_HEADER_MAP_PROMPT_TEMPLATE.format(
+        fields=LEDGER_HEADER_MAP_CANONICAL_FIELDS, grid=_grid_to_text(grid)
+    )
+
+    payload = {
+        "model": _current_model(),
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "reasoning_effort": "none",
+        "max_tokens": 1000,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    max_retries = 3
+    for attempt in range(max_retries + 1):
+        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=60)
+        if resp.status_code == 429:
+            wait_s = None
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    wait_s = float(retry_after)
+                except ValueError:
+                    pass
+            wait_s = (wait_s or 5) + 0.5
+            if attempt < max_retries:
+                time.sleep(wait_s)
+                continue
+        if resp.status_code != 200:
+            raise RuntimeError(f"Groq API error {resp.status_code}: {resp.text[:500]}")
+        break
+
+    body = resp.json()
+    content = body["choices"][0]["message"]["content"]
+    try:
+        parsed = _extract_json(content)
+    except (json.JSONDecodeError, KeyError, IndexError) as e:
+        raise RuntimeError(f"Could not parse Groq ledger header-mapping response as JSON: {e}. Raw: {content[:300]}")
+    return parsed
 
 
 def map_excel_headers(grid: list[list]) -> dict:

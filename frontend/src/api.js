@@ -104,6 +104,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
     }),
+  bulkUpdateField: (ids, field, value) =>
+    req("/transactions/bulk-update-field", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, field, value }),
+    }),
 
   listParties: () => req("/transactions/parties"),
   renameParty: (oldName, newName, docType) =>

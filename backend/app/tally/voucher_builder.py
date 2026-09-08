@@ -550,31 +550,175 @@ def wrap_envelope(tally_messages_xml: str, company_name: str) -> str:
 
 def build_bank_voucher_xml(tx: dict, config: dict) -> str:
     """Journal voucher for a bank-statement row."""
+    return build_ledger_voucher_xml("Journal", tx, config)
+
+
+def build_ledger_voucher_xml(vch_type: str, tx: dict, config: dict) -> str:
+    """
+    Generic two-ledger voucher: money moving between a 'party' ledger and a
+    'cash/bank' ledger, with no GST/inventory involved. This single builder
+    covers Journal (bank-statement reconciliation rows, and now
+    user-uploaded double-entry adjustment sheets), Contra (cash↔bank or
+    bank↔bank self-transfers), Receipt (money coming in — fees, donations,
+    rent received, loan received, ...), and Payment (money going out —
+    salaries, rent paid, expenses, ...).
+
+    It deliberately doesn't care what business or domain the money is for —
+    a college's "Student Fees Received" and a landlord's "Rent Received" and
+    a shop's "Cash Sale Advance" are all the same shape of entry: one
+    ledger debited, one credited, for an amount, on a date, with a
+    narration. The field-specific meaning lives entirely in the party/
+    ledger names, which come from the source data (Excel column or AI
+    read), never hardcoded here.
+    """
     date = _tally_date(tx.get("date"))
-    party = tx.get("party") or "SALDEBTOR"
-    bank_ledger = tx.get("bank_ledger") or config.get("bank_ledger") or "Bank Account"
-    narration = tx.get("narration") or f"Auto-entered by TEasy (Bank){' #' + tx['invoice_number'] if tx.get('invoice_number') else ''}"
+    party = tx.get("party") or "Cash"
+    cash_bank_ledger = tx.get("bank_ledger") or config.get("bank_ledger") or "Cash"
+    default_narration = {
+        "Receipt": "Auto-entered by TEasy (Receipt)",
+        "Payment": "Auto-entered by TEasy (Payment)",
+        "Journal": "Auto-entered by TEasy (Journal)",
+        "Contra": "Auto-entered by TEasy (Contra)",
+    }.get(vch_type, "Auto-entered by TEasy (Bank)")
+    narration = tx.get("narration") or (
+        default_narration + (f" #{tx['invoice_number']}" if tx.get("invoice_number") else "")
+    )
 
     debit = float(tx.get("debit") or 0.0)
     credit = float(tx.get("credit") or 0.0)
-    is_credit = credit > 0
-    amount = credit if is_credit else debit
 
-    if is_credit:
-        debit_ledger, credit_ledger = bank_ledger, party
+    if vch_type == "Receipt":
+        # Money received: cash/bank ledger is debited, the party who paid is credited.
+        debit_ledger, credit_ledger = cash_bank_ledger, party
+        amount = credit or debit or float(tx.get("total_value") or 0.0)
+    elif vch_type == "Payment":
+        # Money paid out: the party/expense ledger is debited, cash/bank is credited.
+        debit_ledger, credit_ledger = party, cash_bank_ledger
+        amount = debit or credit or float(tx.get("total_value") or 0.0)
     else:
-        debit_ledger, credit_ledger = party, bank_ledger
+        # Journal (bank-statement row): direction follows which of debit/credit is set.
+        is_credit = credit > 0
+        amount = credit if is_credit else debit
+        if is_credit:
+            debit_ledger, credit_ledger = cash_bank_ledger, party
+        else:
+            debit_ledger, credit_ledger = party, cash_bank_ledger
 
-    entries = (
-        _ledger_entry(debit_ledger, amount, is_deemed_positive=True)
-        + _ledger_entry(credit_ledger, amount, is_deemed_positive=False)
-    )
+    # TDS split: only ever applies to a Payment row that actually has a
+    # tds_amount set (e.g. professional fees, rent, salary payments that
+    # legally require withholding tax). Rather than crediting the full
+    # amount to cash/bank, the withheld portion is credited to the TDS
+    # ledger instead — the expense ledger is still debited for the FULL
+    # (gross) amount, since the liability incurred is the full amount even
+    # though less cash actually leaves the bank. Every other voucher shape
+    # (Receipt, Journal, Contra, and a plain Payment with no TDS) is
+    # completely unaffected — this only ever adds a third entry, never
+    # changes the existing two-ledger behaviour.
+    tds_amount = float(tx.get("tds_amount") or 0.0) if vch_type == "Payment" else 0.0
+    if tds_amount > 0 and tds_amount < amount:
+        tds_ledger = tx.get("tds_ledger") or config.get("tds_ledger") or "TDS Payable"
+        net_amount = amount - tds_amount
+        entries = (
+            _ledger_entry(debit_ledger, amount, is_deemed_positive=True)
+            + _ledger_entry(credit_ledger, net_amount, is_deemed_positive=False)
+            + _ledger_entry(tds_ledger, tds_amount, is_deemed_positive=False)
+        )
+    else:
+        entries = (
+            _ledger_entry(debit_ledger, amount, is_deemed_positive=True)
+            + _ledger_entry(credit_ledger, amount, is_deemed_positive=False)
+        )
 
     return f"""
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
-          <VOUCHER VCHTYPE="Journal" ACTION="Create" OBJVIEW="Accounting Voucher View">
+          <VOUCHER VCHTYPE="{vch_type}" ACTION="Create" OBJVIEW="Accounting Voucher View">
             <DATE>{date}</DATE>
-            <VOUCHERTYPENAME>Journal</VOUCHERTYPENAME>
+            <VOUCHERTYPENAME>{vch_type}</VOUCHERTYPENAME>
+            <NARRATION>{xml_escape(narration)}</NARRATION>
+            {entries}
+          </VOUCHER>
+        </TALLYMESSAGE>"""
+
+
+def _stock_journal_entry(
+    stock_item: str,
+    qty: float,
+    unit: str | None,
+    rate: float | None,
+    amount: float,
+    godown: str | None,
+    is_deemed_positive: bool,
+) -> str:
+    """
+    One inventory line of a Stock Journal — either the source side
+    (Yes/consumed, negative qty+amount) or the destination side
+    (No/produced, positive qty+amount). Unlike _inventory_entry above,
+    there's deliberately no ACCOUNTINGALLOCATIONS.LIST here: a pure Stock
+    Journal moves inventory quantity/value between godowns or between
+    "raw material" and "finished goods", it doesn't touch any ledger.
+    """
+    amt_val = -abs(amount) if is_deemed_positive else abs(amount)
+    qty_val = -abs(qty) if is_deemed_positive else abs(qty)
+    dp_str = "Yes" if is_deemed_positive else "No"
+    unit = unit or "Nos"
+
+    rate_tag = f"\n          <RATE>{rate:.2f}/{xml_escape(unit)}</RATE>" if rate else ""
+    godown_tag = f"\n          <GODOWNNAME>{xml_escape(godown)}</GODOWNNAME>" if godown else ""
+
+    return f"""
+        <ALLINVENTORYENTRIES.LIST>
+          <STOCKITEMNAME>{xml_escape(stock_item)}</STOCKITEMNAME>
+          <ISDEEMEDPOSITIVE>{dp_str}</ISDEEMEDPOSITIVE>{rate_tag}
+          <AMOUNT>{amt_val:.2f}</AMOUNT>
+          <ACTUALQTY>{qty_val} {xml_escape(unit)}</ACTUALQTY>
+          <BILLEDQTY>{qty_val} {xml_escape(unit)}</BILLEDQTY>{godown_tag}
+        </ALLINVENTORYENTRIES.LIST>"""
+
+
+def build_stock_journal_xml(tx: dict, config: dict) -> str:
+    """
+    Pure inventory movement — no ledger/GST involved at all. Covers three
+    everyday cases with the same shape:
+      - Transfer between two godowns of the same company (both a
+        from_godown and a to_godown given): stock leaves one godown and
+        arrives at the other, same item/qty/value both sides.
+      - Manufacturing consumption (from_godown only, e.g. "Raw Materials"):
+        stock is consumed/used up, only a source entry is emitted.
+      - Manufacturing production (to_godown only, e.g. "Finished Goods"):
+        stock is produced, only a destination entry is emitted.
+    Reuses Transaction.items (the same JSON column item-wise Sales/
+    Purchase invoices already use) for the single stock-item line, and
+    Transaction.party/bank_ledger for from_godown/to_godown respectively —
+    see extraction/stock_journal_excel_parser.py for how a row lands here.
+    """
+    date = _tally_date(tx.get("date"))
+    items = tx.get("items") or []
+    item = items[0] if items else {}
+    stock_item = item.get("name") or "Unknown Item"
+    qty = float(item.get("qty") or 0.0) or 1.0
+    unit = item.get("unit")
+    rate = float(item.get("price") or 0.0) or None
+    amount = float(item.get("amount") or tx.get("total_value") or 0.0)
+
+    from_godown = tx.get("party") or None
+    to_godown = tx.get("bank_ledger") or None
+    narration = tx.get("narration") or "Auto-entered by TEasy (Stock Journal)"
+
+    entries = ""
+    if from_godown:
+        entries += _stock_journal_entry(stock_item, qty, unit, rate, amount, from_godown, is_deemed_positive=True)
+    if to_godown:
+        entries += _stock_journal_entry(stock_item, qty, unit, rate, amount, to_godown, is_deemed_positive=False)
+    if not entries:
+        # Neither godown given — still record the movement (destination
+        # side only, no godown tag) rather than silently dropping the row.
+        entries = _stock_journal_entry(stock_item, qty, unit, rate, amount, None, is_deemed_positive=False)
+
+    return f"""
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER VCHTYPE="Stock Journal" ACTION="Create">
+            <DATE>{date}</DATE>
+            <VOUCHERTYPENAME>Stock Journal</VOUCHERTYPENAME>
             <NARRATION>{xml_escape(narration)}</NARRATION>
             {entries}
           </VOUCHER>
@@ -603,6 +747,22 @@ def build_voucher_envelope(tx: dict, config: dict) -> str:
 
     if raw_type == "BANK":
         message = build_bank_voucher_xml(tx, config)
+        return wrap_envelope(message, config["company_name"])
+
+    if raw_type in ("RECEIPT", "PAYMENT"):
+        message = build_ledger_voucher_xml(raw_type.capitalize(), tx, config)
+        return wrap_envelope(message, config["company_name"])
+
+    if raw_type == "JOURNAL":
+        message = build_ledger_voucher_xml("Journal", tx, config)
+        return wrap_envelope(message, config["company_name"])
+
+    if raw_type == "CONTRA":
+        message = build_ledger_voucher_xml("Contra", tx, config)
+        return wrap_envelope(message, config["company_name"])
+
+    if raw_type in ("STOCK JOURNAL", "STOCKJOURNAL", "STOCK_JOURNAL"):
+        message = build_stock_journal_xml(tx, config)
         return wrap_envelope(message, config["company_name"])
 
     # All Note types (CREDIT, DEBIT, NOTE, CDN) route straight to Debit Note

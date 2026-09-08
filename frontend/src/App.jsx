@@ -30,6 +30,10 @@ const PAGE_META = {
   sales: { title: "Sales Bills", subtitle: "" },
   purchase: { title: "Purchase Bills (B2B Excel)", subtitle: "Exact values imported from GSTR-2B B2B data" },
   gstr2b: { title: "GSTR-2B (Discount Notes)", subtitle: "Credit/debit notes imported from GSTR-2B Excel" },
+  receiptPayment: { title: "Receipt/Payment Register", subtitle: "Money in (fees, donations, rent received…) or money out (salaries, rent paid, expenses…) from your own Excel register" },
+  journal: { title: "Journal Vouchers", subtitle: "Plain double-entry adjustments — opening balances, provisions, depreciation, write-offs — from a Debit Ledger / Credit Ledger / Amount register" },
+  contra: { title: "Contra Vouchers", subtitle: "Cash-to-bank or bank-to-bank self-transfers — cash deposited/withdrawn, funds moved between your own accounts — from a From/To Ledger / Amount register" },
+  stockJournal: { title: "Stock Journal", subtitle: "Inventory movements with no ledger/GST involved — godown-to-godown transfers, manufacturing consumption, or production — from an Item / Quantity / From-To Godown register" },
   review: { title: "Review & Approve", subtitle: "" },
   issues: { title: "Pending Issues", subtitle: "" },
   parties: { title: "Parties & Ledgers", subtitle: "" },
@@ -135,6 +139,10 @@ export default function App() {
       case "sales":
       case "purchase":
       case "gstr2b":
+      case "receiptPayment":
+      case "journal":
+      case "contra":
+      case "stockJournal":
         return <DocumentTypePage pageKey={page} />;
       case "tally":
         return <TallyIntegrationPage />;;

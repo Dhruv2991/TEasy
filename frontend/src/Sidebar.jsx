@@ -13,6 +13,10 @@ const DOCUMENT_ITEMS = [
   { key: "sales", label: "Sales Bills", icon: Icon.Sales },
   { key: "purchase", label: "Purchase (B2B Excel)", icon: Icon.Purchase },
   { key: "gstr2b", label: "Discount (GSTR-2B Excel)", icon: Icon.Gstr2b },
+  { key: "receiptPayment", label: "Receipt/Payment Register", icon: Icon.Transactions },
+  { key: "journal", label: "Journal Vouchers", icon: Icon.Reports },
+  { key: "contra", label: "Contra Vouchers", icon: Icon.Reports },
+  { key: "stockJournal", label: "Stock Journal", icon: Icon.Purchase },
 ];
 
 const WORKFLOW_ITEMS = [

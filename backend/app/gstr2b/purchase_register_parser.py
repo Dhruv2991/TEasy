@@ -214,10 +214,128 @@ class RegisterInvoice:
     row_number: int = 0
 
 
+# AI fallback for a register whose column names/layout don't match the
+# HEADER_VARIANTS aliases or the Value@X%/CGST@X% naming pattern above —
+# e.g. a billing software that exports "GST 5% Taxable"/"GST 5% Tax" pairs
+# instead. Reuses the same header-mapping AI call already wired up for
+# Sales/Purchase bill Excel imports (ocr/ai_vision.py:map_excel_headers),
+# whose "rate_buckets" response shape (rate/value_col/cgst_col/sgst_col/
+# igst_col) is exactly the per-rate breakup this parser already needs —
+# only the column *positions* come from the model, every number is still
+# read directly from the sheet by the same deterministic code below.
+_AI_MAPPING_SAMPLE_ROWS = 15
+
+
+def _rows_to_grid(rows: list, max_rows: int) -> list[list]:
+    return rows[:max_rows]
+
+
+def _parse_via_ai_mapping(rows: list) -> list["RegisterInvoice"] | None:
+    from ..ocr.ai_vision import has_ai_key, map_excel_headers
+
+    if not has_ai_key():
+        return None
+
+    grid = _rows_to_grid(rows, _AI_MAPPING_SAMPLE_ROWS)
+    try:
+        mapping = map_excel_headers(grid)
+    except Exception:
+        return None
+
+    header_row = mapping.get("header_row")
+    field_columns = mapping.get("field_columns") or {}
+    rate_buckets = mapping.get("rate_buckets") or []
+    if not header_row or not field_columns.get("invoice_number") or not rate_buckets:
+        return None
+
+    # map_excel_headers returns 1-based column numbers; this parser's own
+    # _find_header path uses 0-based indices into each row list — convert.
+    def col0(key):
+        v = field_columns.get(key)
+        return (int(v) - 1) if v else None
+
+    invoice_col = col0("invoice_number")
+    date_col = col0("date")
+    gstin_col = col0("party_gstin")
+    party_col = col0("party")
+    total_col = col0("total_value")
+    amount_col = col0("amount")  # used as a fallback taxable_value if no dedicated column
+
+    rate_groups = [
+        {
+            "rate": float(b.get("rate")),
+            "value_col": (int(b["value_col"]) - 1) if b.get("value_col") else None,
+            "cgst_col": (int(b["cgst_col"]) - 1) if b.get("cgst_col") else None,
+            "sgst_col": (int(b["sgst_col"]) - 1) if b.get("sgst_col") else None,
+            "igst_col": (int(b["igst_col"]) - 1) if b.get("igst_col") else None,
+        }
+        for b in rate_buckets
+        if b.get("rate") is not None
+    ]
+    if not rate_groups:
+        return None
+
+    def get(row, col):
+        if col is None or col >= len(row):
+            return None
+        return row[col]
+
+    results = []
+    for r in range(int(header_row), len(rows)):
+        row = rows[r]
+        if not row or all(v in (None, "") for v in row):
+            continue
+        invoice_no = get(row, invoice_col)
+        if not invoice_no or not str(invoice_no).strip():
+            continue
+
+        by_rate = {}
+        for g in rate_groups:
+            taxable = _number(get(row, g["value_col"]))
+            cgst = _number(get(row, g["cgst_col"]))
+            sgst = _number(get(row, g["sgst_col"]))
+            igst = _number(get(row, g["igst_col"]))
+            if taxable == 0 and cgst == 0 and sgst == 0 and igst == 0:
+                continue
+            by_rate[g["rate"]] = {
+                "taxable_value": round(taxable, 2),
+                "cgst": round(cgst, 2),
+                "sgst": round(sgst, 2),
+                "igst": round(igst, 2),
+            }
+
+        item = RegisterInvoice(
+            supplier_gstin=str(get(row, gstin_col) or "").strip() or None,
+            supplier_name=str(get(row, party_col) or "").strip() or None,
+            invoice_number=str(invoice_no).strip(),
+            invoice_date=_date(get(row, date_col)),
+            taxable_value=_number(get(row, amount_col)),
+            total_value=_number(get(row, total_col)),
+            by_rate=by_rate,
+            row_number=r + 1,
+        )
+        if not item.by_rate:
+            item.warnings.append("No non-zero rate columns found for this row — skipped from matching")
+        results.append(item)
+
+    if not results:
+        return None
+
+    note = mapping.get("notes")
+    if note:
+        for item in results:
+            item.warnings.append(f"(AI-mapped columns: {note})")
+
+    return results
+
+
 def parse_purchase_register(file_path: str) -> list[RegisterInvoice]:
     rows = _read_rows(file_path)
     header = _find_header(rows)
     if not header:
+        ai_result = _parse_via_ai_mapping(rows)
+        if ai_result:
+            return ai_result
         raise ValueError(
             "Could not find a recognizable purchase register table in this file — expected columns "
             "like 'Ref No'/'GST No' plus a per-rate breakup (Value@5%, CGST@2.5%, SGST@2.5%, IGST@5%, "
