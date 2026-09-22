@@ -29,7 +29,7 @@ def _current_key() -> str:
 
 
 def _current_model() -> str:
-    return get_settings().get("groq_vision_model") or "qwen/qwen3.6-27b"
+    return get_settings().get("groq_vision_model") or "qwen/qwen3.8-27b"
 
 
 # Kept as a module attribute for any code (and any older import) that checks
