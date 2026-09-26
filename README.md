@@ -95,7 +95,7 @@ SQLite viewer (e.g. the "SQLite Viewer" VS Code extension) or via `/docs`.
 ## 6. How extraction works now (Groq vision, with Tesseract fallback)
 
 Each detected bill crop is sent directly to a Groq vision-language model
-(`backend/app/ocr/groq_vision.py`, currently `qwen/qwen3.6-27b` — Groq
+(`backend/app/ocr/groq_vision.py`, currently `qwen/qwen3.8-27b` — Groq
 retires model IDs periodically, so if you ever see a `model_not_found` /
 404 error, check https://console.groq.com/docs/vision for the current
 model name and update `GROQ_VISION_MODEL` in `.env`) with a prompt asking

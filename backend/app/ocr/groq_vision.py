@@ -6,7 +6,7 @@ This replaces the Tesseract -> regex pipeline for accuracy on handwriting.
 Requires a free API key from https://console.groq.com/keys, set as the
 GROQ_API_KEY environment variable (see backend/.env.example).
 
-Model: llama-4-scout, Groq's current fast vision-capable model. If Groq
+Model: qwen/qwen3.8-27b, Groq's current fast vision-capable model. If Groq
 changes model names, update GROQ_VISION_MODEL below.
 """
 import os
@@ -174,7 +174,7 @@ def _encode_image(path: str) -> str:
 
 def _extract_json(text: str) -> dict:
     cleaned = text.strip()
-    # qwen3.6 is a "thinking" model: it may prepend a <think>...</think>
+    # qwen3.8 is a "thinking" model: it may prepend a <think>...</think>
     # reasoning block before the actual answer. Strip that out first.
     cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL).strip()
     # Safety net: if reasoning_effort=none somehow didn't apply and the
@@ -234,7 +234,7 @@ def extract_bill_with_ai(image_path: str, prompt: str = SALES_EXTRACTION_PROMPT)
             }
         ],
         "temperature": 0.1,
-        # qwen/qwen3.6-27b is a "thinking" model that otherwise burns most of
+        # qwen/qwen3.8-27b is a "thinking" model that otherwise burns most of
         # max_tokens on an internal <think>...</think> reasoning block before
         # ever getting to the JSON answer. Groq's supported way to turn this
         # off for qwen3 models is reasoning_effort="none" (NOT
