@@ -138,3 +138,18 @@ class DocumentOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class BatchUploadItemOut(BaseModel):
+    filename: str
+    status: str
+    document: Optional[DocumentOut] = None
+    error: Optional[str] = None
+
+
+class BatchUploadResponse(BaseModel):
+    total: int
+    successful: int
+    failed: int
+    throttle_delay_seconds: float
+    results: List[BatchUploadItemOut]

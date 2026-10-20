@@ -113,13 +113,13 @@ export default function DashboardPage({ onNavigate }) {
               <div className="w-9 h-9 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center mb-2"><Icon.Sales width={18} height={18} /></div>
               <div className="text-sm font-medium text-slate-900">Sales Bills</div>
               <p className="text-xs text-slate-500 mb-3">Photos of handwritten sales bills (multiple bills in one image supported)</p>
-              <UploadBox label="Upload / Scan" onUpload={(f) => handleUpload(f, "SALES")} />
+              <UploadBox label="Upload / Scan" multiple onUpload={(f) => handleUpload(f, "SALES")} />
             </div>
             <div className="border border-slate-200 rounded-lg p-4">
               <div className="w-9 h-9 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center mb-2"><Icon.Purchase width={18} height={18} /></div>
               <div className="text-sm font-medium text-slate-900">Purchase Bills</div>
               <p className="text-xs text-slate-500 mb-3">Purchase invoices from suppliers / companies</p>
-              <UploadBox label="Upload / Scan" onUpload={(f) => handleUpload(f, "PURCHASE")} />
+              <UploadBox label="Upload / Scan" multiple onUpload={(f) => handleUpload(f, "PURCHASE")} />
             </div>
             <div className="border border-slate-200 rounded-lg p-4">
               <div className="w-9 h-9 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center mb-2"><Icon.Gstr2b width={18} height={18} /></div>

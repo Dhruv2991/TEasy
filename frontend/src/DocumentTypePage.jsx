@@ -277,7 +277,7 @@ export default function DocumentTypePage({ pageKey }) {
           accept={cfg.accept}
           label={cfg.uploadLabel}
           onUpload={handleUpload}
-          multiple={pageKey === "sales"}
+          multiple={pageKey === "sales" || pageKey === "purchase"}
         />
       </div>
 

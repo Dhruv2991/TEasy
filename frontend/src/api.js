@@ -51,6 +51,15 @@ export const api = {
     form.append("document_type", documentType);
     return req("/documents/upload", { method: "POST", body: form });
   },
+  batchUploadDocuments: (files, documentType = "SALES", delaySeconds = 25.0) => {
+    const form = new FormData();
+    for (const file of files) {
+      form.append("files", file);
+    }
+    form.append("document_type", documentType);
+    form.append("delay_seconds", delaySeconds);
+    return req("/documents/batch-upload", { method: "POST", body: form });
+  },
   uploadGstr2b: (file) => {
     const form = new FormData();
     form.append("file", file);

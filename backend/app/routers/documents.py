@@ -1,12 +1,17 @@
+import logging
 import os
+import re
 import shutil
 import time
 import uuid
 from datetime import datetime
+from typing import List, Optional
 
 import cv2
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from ..database import get_db
 from .. import models, schemas
@@ -26,6 +31,10 @@ UPLOAD_DIR = os.path.join(get_data_dir(), "documents")
 PROCESSED_DIR = os.path.join(get_data_dir(), "processed")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(PROCESSED_DIR, exist_ok=True)
+
+# Mandatory throttle delay between processing sub-crops of the same bill
+# to respect Groq's 7,000 ITPM rolling window.
+CROP_THROTTLE_DELAY_SECONDS = 25.0
 
 
 def _log(db: Session, message: str, document_id: int | None = None, transaction_id: int | None = None):
@@ -176,13 +185,158 @@ def upload_document(
     db.refresh(doc)
     _log(db, f"Document '{file.filename}' uploaded ({document_type})", document_id=doc.id)
 
-    if ext in (".xlsx", ".xls"):
-        _process_excel_document(doc.id, db)
-    else:
-        _process_document(doc.id, db)
+    try:
+        if ext in (".xlsx", ".xls"):
+            _process_excel_document(doc.id, db)
+        else:
+            _process_document(doc.id, db)
+    except HTTPException as e:
+        doc.status = "FAILED"
+        db.commit()
+        _log(db, f"Upload processing failed: {e.detail}", document_id=doc.id)
+        raise
 
     db.refresh(doc)
     return doc
+
+
+def parse_rate_limit_delay(error_msg: str, default_delay: float = 25.0, safety_buffer: float = 3.0) -> float:
+    """
+    Extracts required wait time in seconds from a 429 rate limit error message:
+    - 'Please try again in 18.23s.' -> 18.23 + 3.0 = 21.23
+    - 'Please try again in 1m15s.' -> 75.0 + 3.0 = 78.0
+    - 'Please try again in 30 seconds' -> 30.0 + 3.0 = 33.0
+    Falls back to default_delay + safety_buffer if no explicit duration is parsed.
+    """
+    if not error_msg:
+        return default_delay + safety_buffer
+
+    msg = str(error_msg).lower()
+
+    # 1. Match "try again in Xm Ys" or "Xm"
+    m_min_sec = re.search(r"try again in (?:(\d+)\s*m(?:in(?:ute)?s?)?)?\s*(?:(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?)?", msg)
+    if m_min_sec and (m_min_sec.group(1) or m_min_sec.group(2)):
+        minutes = float(m_min_sec.group(1) or 0)
+        seconds = float(m_min_sec.group(2) or 0)
+        total = minutes * 60 + seconds
+        if total > 0:
+            return round(total + safety_buffer, 2)
+
+    # 2. Match general "try again in Xs" / "retry after Xs"
+    m_sec = re.search(r"(?:try again in|retry after|wait)\s*(\d+(?:\.\d+)?)\s*(?:s|sec|seconds)?", msg)
+    if m_sec and m_sec.group(1):
+        try:
+            return round(float(m_sec.group(1)) + safety_buffer, 2)
+        except ValueError:
+            pass
+
+    # 3. Match any duration like "18.23s" following "try again"
+    m_simple = re.search(r"try again.*?(\d+(?:\.\d+)?)\s*s\b", msg)
+    if m_simple and m_simple.group(1):
+        try:
+            return round(float(m_simple.group(1)) + safety_buffer, 2)
+        except ValueError:
+            pass
+
+    return default_delay + safety_buffer
+
+
+@router.post("/batch-upload", response_model=schemas.BatchUploadResponse)
+def batch_upload_documents(
+    files: List[UploadFile] = File(...),
+    document_type: str = Form("SALES"),
+    delay_seconds: float = Form(25.0),
+    db: Session = Depends(get_db),
+):
+    """
+    Sequentially processes a batch of bill files with a controlled throttle delay
+    (default 25 seconds / 25000ms) between requests to respect Groq's 7,000 TPM
+    rolling 1-minute token window.
+
+    Includes smart HTTP 429 backoff: when rate limits occur, extracts the required
+    wait time, pauses the queue with a safety buffer, and automatically retries.
+    """
+    results: List[schemas.BatchUploadItemOut] = []
+    total = len(files)
+    successful = 0
+    failed = 0
+
+    for idx, file in enumerate(files):
+        # Sequential throttle delay between individual files
+        if idx > 0 and delay_seconds > 0:
+            logger.info(
+                f"[Batch Upload] Applying {delay_seconds}s throttle delay before processing file {idx + 1}/{total} ('{file.filename}')"
+            )
+            time.sleep(delay_seconds)
+
+        attempts = 0
+        MAX_RETRIES = 2
+        file_success = False
+
+        while attempts <= MAX_RETRIES and not file_success:
+            attempts += 1
+            try:
+                if hasattr(file.file, "seek"):
+                    file.file.seek(0)
+                doc = upload_document(file=file, document_type=document_type, db=db)
+                successful += 1
+                file_success = True
+                results.append(
+                    schemas.BatchUploadItemOut(
+                        filename=file.filename,
+                        status="success",
+                        document=doc,
+                        error=None,
+                    )
+                )
+            except HTTPException as e:
+                err_msg = str(e.detail) if hasattr(e, "detail") else str(e)
+                if e.status_code == 429 and attempts <= MAX_RETRIES:
+                    wait_time = parse_rate_limit_delay(err_msg, default_delay=25.0, safety_buffer=3.0)
+                    logger.warning(
+                        f"[Batch Upload] 429 Rate limit on file {idx + 1}/{total} ('{file.filename}'). "
+                        f"Pausing queue for {wait_time}s before retry (attempt {attempts}/{MAX_RETRIES}). Detail: {err_msg}"
+                    )
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    failed += 1
+                    logger.warning(
+                        f"[Batch Upload] Failed processing file {idx + 1}/{total} ('{file.filename}'): {err_msg}"
+                    )
+                    results.append(
+                        schemas.BatchUploadItemOut(
+                            filename=file.filename,
+                            status="error",
+                            document=None,
+                            error=err_msg,
+                        )
+                    )
+                    break
+            except Exception as e:
+                failed += 1
+                err_msg = str(e)
+                logger.error(
+                    f"[Batch Upload] Unexpected error processing file {idx + 1}/{total} ('{file.filename}'): {err_msg}",
+                    exc_info=True,
+                )
+                results.append(
+                    schemas.BatchUploadItemOut(
+                        filename=file.filename,
+                        status="error",
+                        document=None,
+                        error=err_msg,
+                    )
+                )
+                break
+
+    return schemas.BatchUploadResponse(
+        total=total,
+        successful=successful,
+        failed=failed,
+        throttle_delay_seconds=delay_seconds,
+        results=results,
+    )
 
 
 def _process_ledger_excel_document(document_id: int, db: Session):
@@ -499,6 +653,20 @@ def _process_document(document_id: int, db: Session):
         import json as _json
 
         for idx, (box, crop) in enumerate(box_crop_pairs):
+            # Mandatory sequential throttle delay between processing individual crops
+            # of the same bill to respect Groq's 7,000 ITPM rolling window.
+            if idx > 0 and CROP_THROTTLE_DELAY_SECONDS > 0:
+                _log(
+                    db,
+                    f"Applying {CROP_THROTTLE_DELAY_SECONDS}s cooldown before extracting crop {idx + 1}/{len(box_crop_pairs)} "
+                    "to respect Groq rate limits",
+                    document_id=doc.id,
+                )
+                logger.info(
+                    f"Document {doc.id}: Applying {CROP_THROTTLE_DELAY_SECONDS}s cooldown before crop {idx + 1}/{len(box_crop_pairs)}"
+                )
+                time.sleep(CROP_THROTTLE_DELAY_SECONDS)
+
             crop_filename = f"{uuid.uuid4().hex}.jpg"
             crop_path = os.path.join(PROCESSED_DIR, crop_filename)
             write_ok = cv2.imwrite(crop_path, crop)
@@ -522,11 +690,40 @@ def _process_document(document_id: int, db: Session):
                 if ext == ".pdf" and idx < len(pdf_parsed_pages) and pdf_parsed_pages[idx]:
                     ai = pdf_parsed_pages[idx]
 
+                # Smart 429 wait-time parsing and auto-retry loop for this crop
                 if not ai:
-                    if doc.document_type == "PURCHASE":
-                        ai = extract_purchase_bill_with_ai(crop_path)
-                    else:
-                        ai = extract_bill_with_ai(crop_path)
+                    crop_attempts = 0
+                    max_crop_retries = 2
+                    while crop_attempts <= max_crop_retries and not ai:
+                        crop_attempts += 1
+                        try:
+                            if doc.document_type == "PURCHASE":
+                                ai = extract_purchase_bill_with_ai(crop_path)
+                            else:
+                                ai = extract_bill_with_ai(crop_path)
+                        except HTTPException as e:
+                            err_msg = str(e.detail) if hasattr(e, "detail") else str(e)
+                            if e.status_code == 429 and crop_attempts <= max_crop_retries:
+                                wait_time = parse_rate_limit_delay(err_msg, default_delay=25.0, safety_buffer=3.0)
+                                _log(
+                                    db,
+                                    f"Bill crop {idx + 1}: Groq 429 rate limit hit. Pausing for {wait_time}s before auto-retry "
+                                    f"(attempt {crop_attempts}/{max_crop_retries})...",
+                                    document_id=doc.id,
+                                )
+                                logger.warning(
+                                    f"Document {doc.id}, Crop {idx + 1}: Groq 429 rate limit hit. Pausing for {wait_time}s "
+                                    f"before retry ({crop_attempts}/{max_crop_retries}). Detail: {err_msg}"
+                                )
+                                time.sleep(wait_time)
+                                continue
+                            else:
+                                _log(
+                                    db,
+                                    f"Bill crop {idx + 1}: rate limit retry failed after {crop_attempts} attempts: {err_msg}",
+                                    document_id=doc.id,
+                                )
+                                raise
 
                 raw_text = ai.get("raw_text") or ""
                 ocr_conf = float(ai.get("confidence") or 0.0)
@@ -598,6 +795,20 @@ def _process_document(document_id: int, db: Session):
                 _log(db, note, document_id=doc.id, transaction_id=tx.id)
                 continue
 
+            except HTTPException as e:
+                # If rate-limit retries for this crop are exhausted or non-retryable HTTPException occurs,
+                # record fallback transaction so subsequent crops can still be processed!
+                _log(db, f"Bill {idx + 1}: extraction error ({e.detail}) — manual review required", document_id=doc.id)
+                tx = models.Transaction(
+                    bill_id=bill.id, type=doc.document_type, party="Cash",
+                    date=None, invoice_number=None, taxable_value=0.0,
+                    gst_rate=0.0, cgst=0.0, sgst=0.0, igst=0.0,
+                    total_value=0.0, confidence=0.0, status="NEEDS_REVIEW",
+                )
+                db.add(tx)
+                db.commit()
+                db.refresh(tx)
+                continue
             except Exception as e:
                 _log(db, f"Bill {idx + 1}: extraction notice: {e}", document_id=doc.id)
                 tx = models.Transaction(
@@ -615,6 +826,8 @@ def _process_document(document_id: int, db: Session):
         doc.status = "NEEDS_REVIEW"
         db.commit()
 
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001 - surfaced to the audit log & status
         import traceback
         tb = traceback.format_exc()

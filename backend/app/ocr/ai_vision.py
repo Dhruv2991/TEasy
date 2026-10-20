@@ -20,6 +20,7 @@ import logging
 from typing import Optional, Dict, Any, List
 
 import cv2
+from fastapi import HTTPException
 import requests
 import numpy as np
 
@@ -139,6 +140,17 @@ def _extract_with_groq(image_path: str, model_name: str, api_key: str, prompt: s
         "response_format": {"type": "json_object"},
     }
     resp = requests.post(url, headers=headers, json=payload, timeout=35)
+    if resp.status_code == 429:
+        try:
+            err_data = resp.json().get("error", {})
+            err_msg = err_data.get("message") or resp.text
+        except Exception:
+            err_msg = resp.text or "Rate limit exceeded"
+        logger.warning("Groq API 429 rate limit exceeded: %s", err_msg)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Groq rate limit exceeded (429): {err_msg}",
+        )
     resp.raise_for_status()
     data = resp.json()
     raw = data["choices"][0]["message"]["content"]
@@ -316,6 +328,9 @@ def call_vision_ai(
         normalized["raw_text"] = json.dumps(raw_dict, indent=2)
         return normalized
 
+    except HTTPException:
+        # Re-raise rate limit or API HTTPExceptions so callers/clients know about 429
+        raise
     except Exception as e:
         logger.warning(
             "AI Vision extraction via '%s' failed: %s. Falling back to local offline OCR.",
