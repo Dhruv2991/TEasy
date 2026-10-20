@@ -15,15 +15,21 @@ class MissingVoucherDateError(Exception):
 
 
 def _tally_date(iso_date) -> str:
-    """Formats date as YYYYMMDD for Tally XML."""
+    """Formats date as YYYYMMDD for Tally XML with robust fallback parsing."""
     if iso_date:
         try:
             if isinstance(iso_date, datetime):
                 return iso_date.strftime("%Y%m%d")
             if hasattr(iso_date, "strftime"):
                 return iso_date.strftime("%Y%m%d")
-            return datetime.fromisoformat(str(iso_date)).strftime("%Y%m%d")
-        except (ValueError, TypeError):
+            try:
+                return datetime.fromisoformat(str(iso_date).strip()).strftime("%Y%m%d")
+            except (ValueError, TypeError):
+                pass
+            from dateutil import parser as dateparser
+            dt = dateparser.parse(str(iso_date).strip(), dayfirst=True)
+            return dt.strftime("%Y%m%d")
+        except Exception:
             pass
     raise MissingVoucherDateError(
         "This transaction has no valid date. Open it in Review & Approve, "
@@ -135,12 +141,25 @@ def _resolve_ledger_names(vch_type: str, rate: float, config: dict, ledgers: lis
     }
 
 
-def _create_ledger_master_xml(name: str, under: str, gst_duty_type: str | None = None) -> str:
+def _create_ledger_master_xml(
+    name: str,
+    under: str,
+    gst_duty_type: str | None = None,
+    gstin: str | None = None,
+    state: str | None = None,
+) -> str:
     gst_fields = ""
     if gst_duty_type:
-        gst_fields = f"""
+        gst_fields += f"""
             <TAXTYPE>GST</TAXTYPE>
             <GSTDUTYHEAD>{xml_escape(gst_duty_type)}</GSTDUTYHEAD>"""
+    if gstin:
+        gst_fields += f"""
+            <PARTYGSTIN>{xml_escape(gstin)}</PARTYGSTIN>
+            <GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE>"""
+    if state:
+        gst_fields += f"""
+            <LEDSTATENAME>{xml_escape(state)}</LEDSTATENAME>"""
     return f"""
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
           <LEDGER NAME="{xml_escape(name)}" ACTION="Create">
@@ -298,23 +317,36 @@ def build_voucher_xml(vch_type_str: str, tx: dict, config: dict, ledgers: list[d
         {"rate": rate, "taxable_value": taxable, "cgst": cgst, "sgst": sgst, "igst": igst}
     ]
 
-    # Accounting Signs (IsDeemedPositive)
-    if vch_type_str.upper() in ["PURCHASE"]:
+    # Accounting Signs (IsDeemedPositive) & Master Hierarchy
+    # Purchase: Supplier Credited, Purchase Debited
+    # Sales: Customer Debited, Sales Credited
+    # Debit Note (Purchase Return): Supplier Debited, Purchase Credited
+    # Credit Note (Sales Return): Customer Credited, Sales Debited
+    if vch_type_str.upper() in ["PURCHASE", "CREDIT NOTE"]:
         party_dp = False
         main_dp = True
     else:  # SALES, DEBIT NOTE
         party_dp = True
         main_dp = False
 
-    parent_group = "Sundry Creditors" if vch_type_str.upper() in ["PURCHASE", "DEBIT NOTE"] else "Sundry Debtors"
-    main_group = "Purchase Accounts" if vch_type_str.upper() in ["PURCHASE", "DEBIT NOTE"] else "Sales Accounts"
+    if vch_type_str.upper() in ["PURCHASE", "DEBIT NOTE"]:
+        parent_group = "Sundry Creditors"
+        main_group = "Purchase Accounts"
+    else:  # SALES, CREDIT NOTE
+        parent_group = "Sundry Debtors"
+        main_group = "Sales Accounts"
     round_off_ledger = config.get("round_off_ledger") or "ROUNDOFF"
+
+    party_gstin = tx.get("party_gstin")
+    party_state = tx.get("party_state")
+    cess = float(tx.get("cess") or 0.0)
 
     masters = []
     entries = [_ledger_entry(party, total, is_deemed_positive=party_dp)]
     if ledgers and not _ledger_exists(ledgers, party) and not _should_skip_master_creation(party):
-        masters.append(_create_ledger_master_xml(party, parent_group))
+        masters.append(_create_ledger_master_xml(party, parent_group, gstin=party_gstin, state=party_state))
 
+    calculated_entries = 0.0
     for part in breakdown:
         part_rate = float(part.get("rate") or 0.0)
         part_taxable = float(part.get("taxable_value") or 0.0)
@@ -336,26 +368,42 @@ def build_voucher_xml(vch_type_str: str, tx: dict, config: dict, ledgers: list[d
                 masters.append(_create_ledger_master_xml(names["igst"], "Duties & Taxes", "Integrated Tax"))
 
         entries.append(_ledger_entry(names["main"], part_taxable, is_deemed_positive=main_dp))
+        calculated_entries += part_taxable
         if part_cgst:
             entries.append(_ledger_entry(names["cgst"], part_cgst, is_deemed_positive=main_dp, rate_pct=part_half_rate))
+            calculated_entries += part_cgst
         if part_sgst:
             entries.append(_ledger_entry(names["sgst"], part_sgst, is_deemed_positive=main_dp, rate_pct=part_half_rate))
+            calculated_entries += part_sgst
         if part_igst:
             entries.append(_ledger_entry(names["igst"], part_igst, is_deemed_positive=main_dp, rate_pct=part_rate))
+            calculated_entries += part_igst
 
+    # Statutory CESS entry
+    if cess > 0:
+        cess_ledger = config.get("cess_ledger", "GST Cess")
+        if ledgers and not _ledger_exists(ledgers, cess_ledger):
+            masters.append(_create_ledger_master_xml(cess_ledger, "Duties & Taxes", "Cess"))
+        entries.append(_ledger_entry(cess_ledger, cess, is_deemed_positive=main_dp))
+        calculated_entries += cess
+
+    # Strict Double-Entry Balance: diff is exact difference between total and all line entries
+    diff = round(total - calculated_entries, 2)
     if ledgers and abs(diff) >= 0.01 and not _ledger_exists(ledgers, round_off_ledger):
         masters.append(_create_ledger_master_xml(round_off_ledger, "Indirect Expenses"))
     names = {"round_off": round_off_ledger}
 
     # Round-off Balancing
     if abs(diff) >= 0.01:
-        if not party_dp:  # Purchase
+        if not party_dp:  # Purchase or Credit Note (Party Credited)
             round_off_dp = (diff > 0)
-        else:             # Sales / Debit Note
+        else:             # Sales or Debit Note (Party Debited)
             round_off_dp = (diff < 0)
         entries.append(_ledger_entry(names["round_off"], abs(diff), is_deemed_positive=round_off_dp))
 
     vch_no_tag = f"<VOUCHERNUMBER>{xml_escape(invoice_number)}</VOUCHERNUMBER>" if invoice_number else ""
+    gstin_tag = f"\n            <PARTYGSTIN>{xml_escape(party_gstin)}</PARTYGSTIN>" if party_gstin else ""
+    state_tag = f"\n            <STATENAME>{xml_escape(party_state)}</STATENAME>\n            <PLACEOFSUPPLY>{xml_escape(party_state)}</PLACEOFSUPPLY>" if party_state else ""
 
     voucher = f"""
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
@@ -363,7 +411,7 @@ def build_voucher_xml(vch_type_str: str, tx: dict, config: dict, ledgers: list[d
             <DATE>{date}</DATE>
             <VOUCHERTYPENAME>{vch_type_str}</VOUCHERTYPENAME>
             {vch_no_tag}
-            <PARTYLEDGERNAME>{xml_escape(party)}</PARTYLEDGERNAME>
+            <PARTYLEDGERNAME>{xml_escape(party)}</PARTYLEDGERNAME>{gstin_tag}{state_tag}
             <REFERENCE>{xml_escape(invoice_number)}</REFERENCE>
             <ISINVOICE>Yes</ISINVOICE>
             <PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>
@@ -409,20 +457,28 @@ def build_item_voucher_xml(
         "igst": float(tx.get("igst") or 0.0),
     }]
 
-    if vch_type_str.upper() in ["PURCHASE"]:
+    party_gstin = tx.get("party_gstin")
+    party_state = tx.get("party_state")
+    cess = float(tx.get("cess") or 0.0)
+
+    if vch_type_str.upper() in ["PURCHASE", "CREDIT NOTE"]:
         party_dp = False
         main_dp = True
     else:  # SALES, DEBIT NOTE
         party_dp = True
         main_dp = False
 
-    parent_group = "Sundry Creditors" if vch_type_str.upper() in ["PURCHASE", "DEBIT NOTE"] else "Sundry Debtors"
-    main_group = "Purchase Accounts" if vch_type_str.upper() in ["PURCHASE", "DEBIT NOTE"] else "Sales Accounts"
+    if vch_type_str.upper() in ["PURCHASE", "DEBIT NOTE"]:
+        parent_group = "Sundry Creditors"
+        main_group = "Purchase Accounts"
+    else:  # SALES, CREDIT NOTE
+        parent_group = "Sundry Debtors"
+        main_group = "Sales Accounts"
     round_off_ledger = config.get("round_off_ledger") or "ROUNDOFF"
 
     masters = []
     if not _ledger_exists(ledgers, party) and not _should_skip_master_creation(party):
-        masters.append(_create_ledger_master_xml(party, parent_group))
+        masters.append(_create_ledger_master_xml(party, parent_group, gstin=party_gstin, state=party_state))
 
     # One resolved sales/purchase ledger name per GST rate present, so each
     # item's inventory allocation points at the right rate-wise account.
@@ -498,17 +554,26 @@ def build_item_voucher_xml(
             entries.append(_invoice_ledger_entry(names["igst"], part_igst, is_deemed_positive=main_dp, rate_pct=part_rate))
             calculated += part_igst
 
+    if cess > 0:
+        cess_ledger = config.get("cess_ledger", "GST Cess")
+        if not _ledger_exists(ledgers, cess_ledger):
+            masters.append(_create_ledger_master_xml(cess_ledger, "Duties & Taxes", "Cess"))
+        entries.append(_invoice_ledger_entry(cess_ledger, cess, is_deemed_positive=main_dp))
+        calculated += cess
+
     diff = round(total - calculated, 2)
     if abs(diff) >= 0.01:
         if not _ledger_exists(ledgers, round_off_ledger):
             masters.append(_create_ledger_master_xml(round_off_ledger, "Indirect Expenses"))
-        if not party_dp:  # Purchase
+        if not party_dp:  # Purchase or Credit Note
             round_off_dp = (diff > 0)
-        else:             # Sales / Debit Note
+        else:             # Sales or Debit Note
             round_off_dp = (diff < 0)
         entries.append(_invoice_ledger_entry(round_off_ledger, abs(diff), is_deemed_positive=round_off_dp))
 
     vch_no_tag = f"<VOUCHERNUMBER>{xml_escape(invoice_number)}</VOUCHERNUMBER>" if invoice_number else ""
+    gstin_tag = f"\n            <PARTYGSTIN>{xml_escape(party_gstin)}</PARTYGSTIN>" if party_gstin else ""
+    state_tag = f"\n            <STATENAME>{xml_escape(party_state)}</STATENAME>\n            <PLACEOFSUPPLY>{xml_escape(party_state)}</PLACEOFSUPPLY>" if party_state else ""
 
     voucher = f"""
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
@@ -516,7 +581,7 @@ def build_item_voucher_xml(
             <DATE>{date}</DATE>
             <VOUCHERTYPENAME>{vch_type_str}</VOUCHERTYPENAME>
             {vch_no_tag}
-            <PARTYLEDGERNAME>{xml_escape(party)}</PARTYLEDGERNAME>
+            <PARTYLEDGERNAME>{xml_escape(party)}</PARTYLEDGERNAME>{gstin_tag}{state_tag}
             <REFERENCE>{xml_escape(invoice_number)}</REFERENCE>
             <ISINVOICE>Yes</ISINVOICE>
             <PERSISTEDVIEW>Invoice Voucher View</PERSISTEDVIEW>
@@ -553,7 +618,9 @@ def build_bank_voucher_xml(tx: dict, config: dict) -> str:
     return build_ledger_voucher_xml("Journal", tx, config)
 
 
-def build_ledger_voucher_xml(vch_type: str, tx: dict, config: dict) -> str:
+def build_ledger_voucher_xml(vch_type: str, tx: dict, config: dict, ledgers: list[dict] | None = None) -> str:
+    ledgers = ledgers or []
+    masters = []
     """
     Generic two-ledger voucher: money moving between a 'party' ledger and a
     'cash/bank' ledger, with no GST/inventory involved. This single builder
@@ -629,7 +696,17 @@ def build_ledger_voucher_xml(vch_type: str, tx: dict, config: dict) -> str:
             + _ledger_entry(credit_ledger, amount, is_deemed_positive=False)
         )
 
-    return f"""
+    if ledgers:
+        if not _ledger_exists(ledgers, debit_ledger) and not _should_skip_master_creation(debit_ledger):
+            debit_grp = "Sundry Debtors" if vch_type in ("Sales", "Receipt") else "Indirect Expenses"
+            masters.append(_create_ledger_master_xml(debit_ledger, debit_grp))
+        if not _ledger_exists(ledgers, credit_ledger) and not _should_skip_master_creation(credit_ledger):
+            credit_grp = "Sundry Creditors" if vch_type in ("Purchase", "Payment") else "Indirect Incomes"
+            masters.append(_create_ledger_master_xml(credit_ledger, credit_grp))
+        if tds_amount > 0 and not _ledger_exists(ledgers, tds_ledger):
+            masters.append(_create_ledger_master_xml(tds_ledger, "Duties & Taxes"))
+
+    voucher = f"""
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
           <VOUCHER VCHTYPE="{vch_type}" ACTION="Create" OBJVIEW="Accounting Voucher View">
             <DATE>{date}</DATE>
@@ -638,6 +715,7 @@ def build_ledger_voucher_xml(vch_type: str, tx: dict, config: dict) -> str:
             {entries}
           </VOUCHER>
         </TALLYMESSAGE>"""
+    return "".join(masters) + voucher
 
 
 def _stock_journal_entry(
@@ -750,23 +828,25 @@ def build_voucher_envelope(tx: dict, config: dict) -> str:
         return wrap_envelope(message, config["company_name"])
 
     if raw_type in ("RECEIPT", "PAYMENT"):
-        message = build_ledger_voucher_xml(raw_type.capitalize(), tx, config)
+        message = build_ledger_voucher_xml(raw_type.capitalize(), tx, config, ledgers)
         return wrap_envelope(message, config["company_name"])
 
     if raw_type == "JOURNAL":
-        message = build_ledger_voucher_xml("Journal", tx, config)
+        message = build_ledger_voucher_xml("Journal", tx, config, ledgers)
         return wrap_envelope(message, config["company_name"])
 
     if raw_type == "CONTRA":
-        message = build_ledger_voucher_xml("Contra", tx, config)
+        message = build_ledger_voucher_xml("Contra", tx, config, ledgers)
         return wrap_envelope(message, config["company_name"])
 
     if raw_type in ("STOCK JOURNAL", "STOCKJOURNAL", "STOCK_JOURNAL"):
         message = build_stock_journal_xml(tx, config)
         return wrap_envelope(message, config["company_name"])
 
-    # All Note types (CREDIT, DEBIT, NOTE, CDN) route straight to Debit Note
-    if any(k in raw_type for k in ["CREDIT", "DEBIT", "NOTE", "CDN"]):
+    # Precise routing for Notes according to standard accounting
+    if "CREDIT" in raw_type or raw_type == "CREDIT_NOTE":
+        vch_type = "Credit Note"
+    elif "DEBIT" in raw_type or raw_type == "DEBIT_NOTE" or "CDN" in raw_type or "NOTE" in raw_type:
         vch_type = "Debit Note"
     elif "SALE" in raw_type:
         vch_type = "Sales"

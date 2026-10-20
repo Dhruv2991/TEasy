@@ -92,6 +92,7 @@ def run_lightweight_migrations():
         "balance": "FLOAT",
         "party_gstin": "VARCHAR",
         "party_state": "VARCHAR",
+        "irn": "VARCHAR",
         "company_id": "INTEGER",
         "bank_ledger": "VARCHAR",
         "tds_amount": "FLOAT DEFAULT 0.0",

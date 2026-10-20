@@ -52,29 +52,38 @@ def _is_duplicate_invoice(
     invoice_number: str | None,
     exclude_tx_id: int | None = None,
     taxable_value: float | None = None,
+    company_id: int | None = None,
+    irn: str | None = None,
 ) -> bool:
     """
     True if this looks like the same invoice already recorded.
-
-    A single real invoice can legitimately appear as several rows/lines when
-    it has items taxed at more than one GST rate (the GSTR-2B B2B export
-    splits a multi-rate bill into one row per rate). Those rows share the
-    same party + invoice number but have different taxable values, so
-    matching on taxable_value too (in addition to party + invoice number)
-    keeps that case from being flagged as a false "possible duplicate" while
-    still catching a genuine re-upload of the exact same invoice/line.
+    Scoped by company_id and validates IRN cryptographic hash when available.
     """
+    scope_cid = company_id if company_id is not None else get_active_company_id()
+
+    if irn and irn.strip():
+        irn_query = db.query(models.Transaction).filter(
+            models.Transaction.irn == irn.strip(),
+            models.Transaction.status != "REJECTED",
+        )
+        if scope_cid:
+            irn_query = irn_query.filter(models.Transaction.company_id == scope_cid)
+        if exclude_tx_id:
+            irn_query = irn_query.filter(models.Transaction.id != exclude_tx_id)
+        if db.query(irn_query.exists()).scalar():
+            return True
+
     if not invoice_number or not invoice_number.strip():
         return False
     query = db.query(models.Transaction).filter(
         models.Transaction.type == doc_type,
         models.Transaction.party == party,
-        models.Transaction.invoice_number == invoice_number,
+        models.Transaction.invoice_number == invoice_number.strip(),
         models.Transaction.status != "REJECTED",
     )
+    if scope_cid:
+        query = query.filter(models.Transaction.company_id == scope_cid)
     if taxable_value is not None:
-        # Small tolerance for float/rounding noise, not for genuinely
-        # different rate-lines (those differ by far more than a rupee).
         query = query.filter(
             models.Transaction.taxable_value.between(taxable_value - 1.0, taxable_value + 1.0)
         )
@@ -219,7 +228,7 @@ def update_transaction(
 
     # Re-check duplicate status
     tx.possible_duplicate = _is_duplicate_invoice(
-        db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id, taxable_value=tx.taxable_value
+        db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id, taxable_value=tx.taxable_value, company_id=tx.company_id, irn=tx.irn
     )
 
     db.add(
@@ -247,7 +256,8 @@ def approve_transaction(transaction_id: int, db: Session = Depends(get_db)):
         )
 
     tx.status = "APPROVED"
-    tx.tally_status = "NOT_SENT"  # Required so Tally queries pick it up
+    if tx.tally_status != "SENT":
+        tx.tally_status = "NOT_SENT"
     tx.approved_at = datetime.datetime.utcnow()
     
     if not tx.company_id:
@@ -313,7 +323,8 @@ def bulk_approve_transactions(
             continue
 
         tx.status = "APPROVED"
-        tx.tally_status = "NOT_SENT"  # Required so Tally queries pick it up
+        if tx.tally_status != "SENT":
+            tx.tally_status = "NOT_SENT"
         tx.approved_at = datetime.datetime.utcnow()
         
         if not tx.company_id:

@@ -15,3 +15,19 @@ def round_rupee(value):
     if value is None:
         return None
     return round(float(value))
+
+
+def split_tax_amount(tax_amount: float) -> tuple[float, float]:
+    """
+    Splits an intra-state GST tax amount equally between CGST and SGST,
+    guaranteeing that CGST + SGST == tax_amount down to the exact paisa.
+    Prevents floating-point/rounding discrepancies where 55.45 / 2 might
+    round both halves to 27.73 (summing to 55.46) or 27.72 (summing to 55.44).
+    """
+    if not tax_amount:
+        return 0.0, 0.0
+    tax_clean = round(float(tax_amount), 2)
+    cgst = round(tax_clean / 2.0, 2)
+    sgst = round(tax_clean - cgst, 2)
+    return cgst, sgst
+

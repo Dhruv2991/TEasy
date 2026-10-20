@@ -56,12 +56,26 @@ def send_voucher_xml(xml: str) -> dict:
     errors = _extract_int(text, "ERRORS")
 
     error_message = None
-    line_error_match = re.search(r"<LINEERROR>(.*?)</LINEERROR>", text, re.DOTALL | re.IGNORECASE)
-    if line_error_match:
-        # Tally's response is XML, so any apostrophes/quotes/ampersands in
-        # the message come back as &apos;/&quot;/&amp; — decode them, or
-        # the user sees literal "&apos;Purchase&apos;" instead of 'Purchase'.
-        error_message = xml_unescape(line_error_match.group(1).strip(), {"&apos;": "'", "&quot;": '"'})
+    # Inspect all common error tags emitted by Tally Prime HTTP responses
+    error_patterns = [
+        r"<LINEERROR>(.*?)</LINEERROR>",
+        r"<EXCEPTION>(.*?)</EXCEPTION>",
+        r"<DESC>(.*?)</DESC>",
+        r"<RESPONSEMESSAGE>(.*?)</RESPONSEMESSAGE>",
+    ]
+    found_messages = []
+    for pattern in error_patterns:
+        for m in re.finditer(pattern, text, re.DOTALL | re.IGNORECASE):
+            raw_msg = m.group(1).strip()
+            if raw_msg and raw_msg not in found_messages:
+                clean_msg = xml_unescape(raw_msg, {"&apos;": "'", "&quot;": '"'})
+                # Strip internal XML artifacts if nested
+                clean_msg = re.sub(r"<[^>]+>", " ", clean_msg).strip()
+                if clean_msg:
+                    found_messages.append(clean_msg)
+
+    if found_messages:
+        error_message = " | ".join(found_messages)
     elif errors and errors > 0:
         error_message = "Tally reported an error during voucher import but did not specify details."
 

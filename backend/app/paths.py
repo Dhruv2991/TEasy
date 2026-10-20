@@ -31,6 +31,14 @@ def get_data_dir() -> str:
     return data_dir
 
 
+def get_models_dir() -> str:
+    """Location for local offline machine learning models (e.g. TrOCR weights)."""
+    data_dir = get_data_dir()
+    models_dir = os.path.join(data_dir, "models")
+    os.makedirs(models_dir, exist_ok=True)
+    return models_dir
+
+
 def get_frontend_dir() -> str | None:
     """Location of the built frontend (frontend/dist) bundled into the exe."""
     if getattr(sys, "frozen", False):

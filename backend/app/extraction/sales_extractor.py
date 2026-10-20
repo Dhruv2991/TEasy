@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from dateutil import parser as dateparser
 
-from ..money import round_rupee
+from ..money import round_rupee, split_tax_amount
 
 
 AMOUNT_RE = re.compile(r"(?:rs\.?|inr|₹)?\s*([0-9][0-9,]*\.?[0-9]{0,2})", re.IGNORECASE)
@@ -19,7 +19,7 @@ GST_RATE_RE = re.compile(r"(\d{1,2})\s*%\s*(gst|cgst|sgst|igst)?", re.IGNORECASE
 DATE_RE = re.compile(
     r"(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})|(\d{1,2}\s?[A-Za-z]{3,9}\s?\d{2,4})"
 )
-INVOICE_RE = re.compile(r"(?:inv(?:oice)?[.\s#:-]*)([A-Za-z0-9/\-]{3,20})", re.IGNORECASE)
+INVOICE_RE = re.compile(r"(?:inv(?:oice)?|bill\s*no|vch\s*no|no)[.\s#:-]*([A-Za-z0-9/\-]{1,25})", re.IGNORECASE)
 
 
 @dataclass
@@ -62,7 +62,9 @@ def _parse_date(text: str) -> str | None:
     candidate = m.group(0)
     try:
         dt = dateparser.parse(candidate, dayfirst=True, fuzzy=True)
-        return dt.date().isoformat()
+        if 2000 <= dt.year <= 2035:
+            return dt.date().isoformat()
+        return None
     except (ValueError, OverflowError):
         return None
 
@@ -100,8 +102,7 @@ def extract_sales_transaction(raw_text: str, ocr_confidence: float) -> Extracted
             gst_amount = round(total - taxable, 2)
             tx.taxable_value = taxable
             tx.gst_rate = gst_rate
-            tx.cgst = round(gst_amount / 2, 2)
-            tx.sgst = round(gst_amount / 2, 2)
+            tx.cgst, tx.sgst = split_tax_amount(gst_amount)
             tx.rate_breakdown = [{
                 "rate": gst_rate,
                 "taxable_value": tx.taxable_value,

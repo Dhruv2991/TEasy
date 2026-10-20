@@ -83,11 +83,26 @@ def extract_invoice_number(bill_crop: np.ndarray) -> Optional[str]:
     ocr_input = cv2.cvtColor(ocr_input, cv2.COLOR_BGR2GRAY)
     ocr_input = cv2.resize(ocr_input, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
 
-    text = pytesseract.image_to_string(
-        ocr_input, config="--psm 7 -c tessedit_char_whitelist=0123456789"
-    )
-    digits = re.sub(r"[^0-9]", "", text)
-    return digits or None
+    try:
+        text = pytesseract.image_to_string(
+            ocr_input, config="--psm 7 -c tessedit_char_whitelist=0123456789"
+        )
+        digits = re.sub(r"[^0-9]", "", text)
+        if digits:
+            return digits
+    except Exception:
+        pass
+
+    # Fallback to local TrOCR handwritten recognition
+    try:
+        from .trocr_engine import recognize_handwritten_digits
+        trocr_digits = recognize_handwritten_digits(region) or recognize_handwritten_digits(ocr_input)
+        if trocr_digits:
+            return trocr_digits
+    except Exception:
+        pass
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -123,8 +138,11 @@ class TaxFields:
 
 
 def _ocr_lines(img: np.ndarray) -> list[str]:
-    text = pytesseract.image_to_string(img, config="--psm 6")
-    return [l.strip() for l in text.splitlines() if l.strip()]
+    try:
+        text = pytesseract.image_to_string(img, config="--psm 6")
+        return [l.strip() for l in text.splitlines() if l.strip()]
+    except Exception:
+        return []
 
 
 def extract_tax_fields(bill_crop: np.ndarray) -> TaxFields:
@@ -162,6 +180,19 @@ def extract_tax_fields(bill_crop: np.ndarray) -> TaxFields:
                 if candidate and candidate != result.taxable_value:
                     result.grand_total_written = candidate
 
+    # --- TrOCR fallback for handwritten total if Tesseract missed it ---
+    if result.grand_total_written is None:
+        try:
+            from .trocr_engine import recognize_handwritten_amount
+            h, w = bill_crop.shape[:2]
+            # Amount boxes are typically located in the bottom-right quadrant of physical bills
+            amount_quadrant = bill_crop[int(h * 0.55):h, int(w * 0.45):w]
+            hw_amt = recognize_handwritten_amount(amount_quadrant)
+            if hw_amt and hw_amt > 0:
+                result.grand_total_written = hw_amt
+        except Exception:
+            pass
+
     # --- Auto-calculate expected values from taxable value + GST% ---
     if result.taxable_value is not None:
         if result.cgst_pct is not None:
@@ -198,14 +229,44 @@ def extract_tax_fields(bill_crop: np.ndarray) -> TaxFields:
 
 
 # ---------------------------------------------------------------------------
-# 3. Convenience: run both on one bill crop
+# 3. Date extraction with TrOCR fallback
+# ---------------------------------------------------------------------------
+
+def extract_date_from_crop(bill_crop: np.ndarray) -> Optional[str]:
+    """Extract handwritten or printed date from the header region of a bill crop."""
+    h, w = bill_crop.shape[:2]
+    # Dates are typically in the upper right quadrant of the bill header
+    date_box = bill_crop[0:int(h * 0.35), int(w * 0.45):w]
+    if date_box.size == 0:
+        return None
+
+    try:
+        text = pytesseract.image_to_string(date_box, config="--psm 6")
+        date_match = re.search(r"\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\b", text)
+        if date_match:
+            return date_match.group(1).replace(".", "-").replace("/", "-")
+    except Exception:
+        pass
+
+    # Fallback to local TrOCR for handwritten dates
+    try:
+        from .trocr_engine import recognize_handwritten_date
+        return recognize_handwritten_date(date_box)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# 4. Convenience: run field extraction on one bill crop
 # ---------------------------------------------------------------------------
 
 def extract_bill_summary(bill_crop: np.ndarray) -> dict:
     invoice_no = extract_invoice_number(bill_crop)
+    date = extract_date_from_crop(bill_crop)
     tax = extract_tax_fields(bill_crop)
     return {
         "invoice_no": invoice_no,
+        "date": date,
         "taxable_value": tax.taxable_value,
         "cgst_pct": tax.cgst_pct,
         "sgst_pct": tax.sgst_pct,

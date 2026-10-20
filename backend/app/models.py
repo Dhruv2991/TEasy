@@ -159,6 +159,7 @@ class Transaction(Base):
     # those. See gst_states.py for how party_state is derived from it.
     party_gstin = Column(String, nullable=True)
     party_state = Column(String, nullable=True)
+    irn = Column(String, nullable=True, index=True)
     # Denormalized from the parent Document rather than requiring a join —
     # reports.py and reconciliation.py both filter/group by company on
     # every request, and Transaction is the table those actually query.

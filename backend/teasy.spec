@@ -38,17 +38,19 @@ HIDDEN_IMPORTS = (
         "pandas._libs.tslibs.nattype",
         "pandas._libs.window.aggregations",
         "pandas.io.formats.style",
+        "pyzbar",
     ]
     + collect_submodules("openpyxl")
     + collect_submodules("pdfplumber")
     + collect_submodules("pypdfium2")
+    + collect_submodules("rapidfuzz")
 )
 
 a = Analysis(
     ["launcher.py"],
     pathex=[],
-    binaries=collect_dynamic_libs("pypdfium2"),
-    datas=[(FRONTEND_DIST, "frontend_dist")] + collect_data_files("pdfplumber") + collect_data_files("pypdfium2"),
+    binaries=collect_dynamic_libs("pypdfium2") + collect_dynamic_libs("pyzbar"),
+    datas=[(FRONTEND_DIST, "frontend_dist")] + collect_data_files("pdfplumber") + collect_data_files("pypdfium2") + collect_data_files("pyzbar"),
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     runtime_hooks=[],

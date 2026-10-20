@@ -67,3 +67,43 @@ def gstin_to_state(gstin: str | None) -> str | None:
     if len(gstin) < 2 or not gstin[:2].isdigit():
         return None
     return STATE_CODES.get(gstin[:2])
+
+
+def determine_gst_tax_routing(
+    company_gstin: str | None,
+    company_state_code: str | None,
+    party_gstin: str | None,
+    party_state: str | None = None,
+) -> str:
+    """
+    Determines whether a transaction should be treated as Intra-State (CGST + SGST)
+    or Inter-State (IGST) according to Indian GST law:
+    - Same State Code -> 'INTRA' (split tax equally into CGST & SGST)
+    - Different State Code -> 'INTER' (full tax to IGST)
+    - Unregistered / unknown party state -> defaults to 'INTRA' (local supply)
+    """
+    comp_state = None
+    if company_state_code and str(company_state_code).strip():
+        comp_state = str(company_state_code).strip()[:2]
+    elif company_gstin and len(str(company_gstin).strip()) >= 2 and str(company_gstin).strip()[:2].isdigit():
+        comp_state = str(company_gstin).strip()[:2]
+
+    party_st = None
+    if party_gstin and len(str(party_gstin).strip()) >= 2 and str(party_gstin).strip()[:2].isdigit():
+        party_st = str(party_gstin).strip()[:2]
+    elif party_state and str(party_state).strip():
+        st = str(party_state).strip()
+        if len(st) == 2 and st.isdigit():
+            party_st = st
+        else:
+            st_lower = st.lower()
+            for code, name in STATE_CODES.items():
+                if name.lower() == st_lower:
+                    party_st = code
+                    break
+
+    if comp_state and party_st:
+        return "INTER" if comp_state != party_st else "INTRA"
+
+    return "INTRA"
+

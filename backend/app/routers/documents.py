@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models, schemas
 from ..settings import get_active_company_id
+from ..gst_states import gstin_to_state
 from ..ocr.preprocess import preprocess_pipeline
 from ..ocr.bill_detector import crop_bills
 from ..ocr.grid_detector import detect_four_bill_grid
@@ -32,29 +33,49 @@ def _log(db: Session, message: str, document_id: int | None = None, transaction_
     db.commit()
 
 
-def _is_duplicate_invoice(db: Session, doc_type: str, party: str, invoice_number: str | None, exclude_tx_id: int | None = None, taxable_value: float | None = None) -> bool:
+def _is_duplicate_invoice(
+    db: Session,
+    doc_type: str,
+    party: str,
+    invoice_number: str | None,
+    exclude_tx_id: int | None = None,
+    taxable_value: float | None = None,
+    company_id: int | None = None,
+    irn: str | None = None,
+) -> bool:
     """
     True if another APPROVED-or-pending transaction of the same type+party
-    already has this exact invoice_number. A blank/null invoice_number is
-    never flagged (too common — e.g. cash sales usually have no number, and
-    flagging every one of those as a "duplicate" would be pure noise).
-
-    When taxable_value is given, it's matched too (within a small rounding
-    tolerance) so that a genuine multi-GST-rate invoice — which can appear
-    as more than one line/transaction sharing the same invoice number — is
-    not mistaken for a duplicate.
+    already has this exact invoice_number or IRN hash. Scoped to the active company.
     """
+    scope_cid = company_id if company_id is not None else get_active_company_id()
+
+    # Check cryptographic IRN hash first if present
+    if irn and irn.strip():
+        irn_query = db.query(models.Transaction).filter(
+            models.Transaction.irn == irn.strip(),
+            models.Transaction.status != "REJECTED",
+        )
+        if scope_cid:
+            irn_query = irn_query.filter(models.Transaction.company_id == scope_cid)
+        if exclude_tx_id:
+            irn_query = irn_query.filter(models.Transaction.id != exclude_tx_id)
+        if db.query(irn_query.exists()).scalar():
+            return True
+
     if not invoice_number or not invoice_number.strip():
         return False
+
     query = (
         db.query(models.Transaction)
         .filter(
             models.Transaction.type == doc_type,
             models.Transaction.party == party,
-            models.Transaction.invoice_number == invoice_number,
+            models.Transaction.invoice_number == invoice_number.strip(),
             models.Transaction.status != "REJECTED",
         )
     )
+    if scope_cid:
+        query = query.filter(models.Transaction.company_id == scope_cid)
     if taxable_value is not None:
         query = query.filter(
             models.Transaction.taxable_value.between(taxable_value - 1.0, taxable_value + 1.0)
@@ -354,12 +375,16 @@ def _process_excel_document(document_id: int, db: Session):
             elif "PURCHASE" in vt:
                 row_type = "PURCHASE"
 
+        row_gstin = getattr(row, "party_gstin", None)
         tx = models.Transaction(
             bill_id=bill.id, type=row_type, party=party, date=row.date,
             invoice_number=row.invoice_number, taxable_value=row.taxable_value,
             gst_rate=row.gst_rate, cgst=row.cgst, sgst=row.sgst, igst=row.igst,
             total_value=row.total_value, confidence=confidence,
             status="NEEDS_REVIEW",
+            party_gstin=row_gstin,
+            party_state=gstin_to_state(row_gstin),
+            company_id=doc.company_id,
             rate_breakdown=_json.dumps(row.rate_breakdown) if len(row.rate_breakdown) > 1 else None,
             items=_json.dumps(row.items) if row.items else None,
         )
@@ -368,7 +393,7 @@ def _process_excel_document(document_id: int, db: Session):
         db.refresh(tx)
 
         tx.possible_duplicate = _is_duplicate_invoice(
-            db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id, taxable_value=tx.taxable_value
+            db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id, taxable_value=tx.taxable_value, company_id=doc.company_id
         )
         db.commit()
         db.refresh(tx)
@@ -462,22 +487,22 @@ def _process_document(document_id: int, db: Session):
             _log(db, "No valid bill regions could be cropped from this photo — try a clearer/flatter photo", document_id=doc.id)
             return
 
-        for idx, (box, crop) in enumerate(box_crop_pairs):
-            # Small gap between AI calls when a page has multiple bills —
-            # avoids bursting through the provider's free-tier per-minute
-            # limit in the first place (the retry-with-backoff in
-            # groq_vision.py/gemini_vision.py is still there as a backstop
-            # if this isn't enough).
-            if idx > 0 and has_ai_key():
-                time.sleep(2)
+        # If PDF, attempt native vector and QR code extraction first
+        pdf_parsed_pages = []
+        if ext == ".pdf":
+            try:
+                from ..extraction.pdf_invoice_parser import parse_pdf_document
+                pdf_parsed_pages = parse_pdf_document(doc.file_path, doc_type=doc.document_type)
+            except Exception as e:
+                _log(db, f"PDF native parsing notice: {e} (proceeding with rasterized processing)", document_id=doc.id)
 
+        import json as _json
+
+        for idx, (box, crop) in enumerate(box_crop_pairs):
             crop_filename = f"{uuid.uuid4().hex}.jpg"
             crop_path = os.path.join(PROCESSED_DIR, crop_filename)
             write_ok = cv2.imwrite(crop_path, crop)
             if not write_ok or not os.path.exists(crop_path):
-                # Don't create any DB rows for a bill whose image we can't
-                # actually save — that's what previously caused 404s on
-                # /files/processed/... for entries the frontend tried to show.
                 _log(db, f"Bill {idx + 1}: failed to save cropped image, skipping this bill", document_id=doc.id)
                 continue
 
@@ -491,96 +516,90 @@ def _process_document(document_id: int, db: Session):
             db.commit()
             db.refresh(bill)
 
-            if has_ai_key():
-                # Primary path: the selected AI provider (Groq or Gemini)
-                # reads the crop directly. Much stronger on handwriting
-                # than Tesseract + regex.
-                try:
+            try:
+                # Check if native PDF extractor already parsed this page
+                ai = None
+                if ext == ".pdf" and idx < len(pdf_parsed_pages) and pdf_parsed_pages[idx]:
+                    ai = pdf_parsed_pages[idx]
+
+                if not ai:
                     if doc.document_type == "PURCHASE":
                         ai = extract_purchase_bill_with_ai(crop_path)
                     else:
                         ai = extract_bill_with_ai(crop_path)
-                    raw_text = ai["raw_text"]
-                    ocr_conf = ai["confidence"]
-                    validation_ok, validation_problems = (
-                        _validate_sales_ai(ai) if doc.document_type == "SALES" else (True, [])
-                    )
 
-                    ocr_result = models.OcrResult(
-                        bill_id=bill.id, raw_text=raw_text, mean_confidence=ocr_conf
-                    )
-                    db.add(ocr_result)
+                raw_text = ai.get("raw_text") or ""
+                ocr_conf = float(ai.get("confidence") or 0.0)
+                validation_ok, validation_problems = (
+                    _validate_sales_ai(ai) if doc.document_type == "SALES" else (True, [])
+                )
 
-                    tx = models.Transaction(
-                        bill_id=bill.id,
-                        type=doc.document_type,
-                        # For sales bills, party is always the configured Cash
-                        # Ledger — this bill-book format's "Sri" (customer)
-                        # field is essentially always left blank for cash
-                        # sales, so we don't ask the AI to read it at all
-                        # (one less thing that can be misread), and we don't
-                        # hardcode the literal string "Cash" either, since
-                        # that would silently create a stray duplicate ledger
-                        # for any user whose actual Cash Ledger is named
-                        # something else in Tally.
-                        party=(
-                            get_tally_config().get("cash_ledger", "Cash")
-                            if doc.document_type == "SALES"
-                            else (ai["party"] or "Unknown Supplier")
-                        ),
-                        date=ai["date"],
-                        invoice_number=ai["invoice_number"],
-                        taxable_value=ai["taxable_value"],
-                        gst_rate=ai["gst_rate"],
-                        cgst=ai["cgst"],
-                        sgst=ai["sgst"],
-                        igst=ai["igst"],
-                        total_value=ai["total_value"],
-                        confidence=ai["confidence"],
-                        status="NEEDS_REVIEW",
-                    )
-                    db.add(tx)
-                    db.commit()
-                    db.refresh(tx)
+                ocr_result = models.OcrResult(
+                    bill_id=bill.id, raw_text=raw_text, mean_confidence=ocr_conf
+                )
+                db.add(ocr_result)
 
-                    tx.possible_duplicate = _is_duplicate_invoice(db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id, taxable_value=tx.taxable_value)
-                    db.commit()
-                    db.refresh(tx)
+                # Format items if extracted from e-invoice / PDF tables
+                items_json = None
+                if ai.get("items"):
+                    items_json = _json.dumps(ai["items"]) if isinstance(ai["items"], list) else str(ai["items"])
 
-                    note = f"Bill {idx + 1} (AI/Groq, {doc.document_type}): total={ai['total_value']}, confidence={ai['confidence']}"
-                    if ai.get("notes"):
-                        note += f" | model notes: {ai['notes']}"
-                    if doc.document_type == "SALES" and not validation_ok:
-                        note += " | ⚠ VALIDATION FAILED: " + "; ".join(validation_problems)
-                    elif doc.document_type == "SALES":
-                        note += " | deterministic accounting validation passed"
-                    if tx.possible_duplicate:
-                        note += f" | ⚠ POSSIBLE DUPLICATE invoice_number '{tx.invoice_number}' for {tx.party}"
-                    _log(db, note, document_id=doc.id, transaction_id=tx.id)
-                    continue
-                except RuntimeError as e:
-                    # Accuracy-first rule: never replace a failed vision read
-                    # with heuristic OCR that can manufacture amounts. Create a
-                    # blank review row instead, so the user fixes the source or
-                    # enters the value manually.
-                    _log(db, f"Bill {idx + 1}: AI extraction failed — no guessing/fallback values were generated: {e}", document_id=doc.id)
-                    tx = models.Transaction(
-                        bill_id=bill.id, type=doc.document_type, party="Cash",
-                        date=None, invoice_number=None, taxable_value=0.0,
-                        gst_rate=0.0, cgst=0.0, sgst=0.0, igst=0.0,
-                        total_value=0.0, confidence=0.0, status="NEEDS_REVIEW",
-                    )
-                    db.add(tx)
-                    db.commit()
-                    db.refresh(tx)
-                    _log(db, f"Bill {idx + 1}: manual entry required because AI could not read it", document_id=doc.id, transaction_id=tx.id)
-                    continue
+                ai_party = ai.get("party")
+                if doc.document_type == "SALES":
+                    # If an actual customer name was detected from digital PDF / e-invoice QR, preserve it
+                    if ai_party and ai_party.lower() not in ("cash", "unknown supplier", "supplier"):
+                        tx_party = ai_party
+                    else:
+                        tx_party = get_tally_config().get("cash_ledger", "Cash")
+                else:
+                    tx_party = ai_party or "Unknown Supplier"
 
-            # No API key configured for the active provider: do not run the
-            # old amount heuristics for handwritten sales. A heuristic such
-            # as 'largest number = total' is exactly the kind of silent
-            # guessing this accounting workflow must avoid.
-            if not has_ai_key():
+                extracted_gstin = ai.get("party_gstin")
+                tx = models.Transaction(
+                    bill_id=bill.id,
+                    type=doc.document_type,
+                    party=tx_party,
+                    date=ai.get("date"),
+                    invoice_number=ai.get("invoice_number"),
+                    irn=ai.get("irn"),
+                    taxable_value=float(ai.get("taxable_value") or 0.0),
+                    gst_rate=float(ai.get("gst_rate") or 0.0),
+                    cgst=float(ai.get("cgst") or 0.0),
+                    sgst=float(ai.get("sgst") or 0.0),
+                    igst=float(ai.get("igst") or 0.0),
+                    cess=float(ai.get("cess") or 0.0),
+                    total_value=float(ai.get("total_value") or 0.0),
+                    confidence=ocr_conf,
+                    status="NEEDS_REVIEW",
+                    party_gstin=extracted_gstin,
+                    party_state=gstin_to_state(extracted_gstin),
+                    company_id=doc.company_id,
+                    items=items_json,
+                )
+                db.add(tx)
+                db.commit()
+                db.refresh(tx)
+
+                tx.possible_duplicate = _is_duplicate_invoice(
+                    db, tx.type, tx.party, tx.invoice_number, exclude_tx_id=tx.id, taxable_value=tx.taxable_value, company_id=doc.company_id, irn=ai.get("irn")
+                )
+                db.commit()
+                db.refresh(tx)
+
+                note = f"Bill {idx + 1} (Offline Engine, {doc.document_type}): total={ai.get('total_value')}, confidence={ai.get('confidence')}"
+                if ai.get("notes"):
+                    note += f" | {ai['notes']}"
+                if doc.document_type == "SALES" and not validation_ok:
+                    note += " | ⚠ VALIDATION NOTICE: " + "; ".join(validation_problems)
+                elif doc.document_type == "SALES":
+                    note += " | deterministic accounting validation passed"
+                if tx.possible_duplicate:
+                    note += f" | ⚠ POSSIBLE DUPLICATE invoice_number '{tx.invoice_number}' for {tx.party}"
+                _log(db, note, document_id=doc.id, transaction_id=tx.id)
+                continue
+
+            except Exception as e:
+                _log(db, f"Bill {idx + 1}: extraction notice: {e}", document_id=doc.id)
                 tx = models.Transaction(
                     bill_id=bill.id, type=doc.document_type, party="Cash",
                     date=None, invoice_number=None, taxable_value=0.0,
@@ -590,7 +609,7 @@ def _process_document(document_id: int, db: Session):
                 db.add(tx)
                 db.commit()
                 db.refresh(tx)
-                _log(db, f"Bill {idx + 1}: GROQ_API_KEY missing — manual entry required; no guessed values generated", document_id=doc.id, transaction_id=tx.id)
+                _log(db, f"Bill {idx + 1}: manual entry required", document_id=doc.id, transaction_id=tx.id)
                 continue
 
         doc.status = "NEEDS_REVIEW"

@@ -11,22 +11,23 @@ import os
 from .paths import get_data_dir
 
 DEFAULTS = {
-    "ai_provider": "groq",  # "groq" or "gemini" — which vision API extract_bill_with_ai routes to
+    "ai_provider": "offline",  # "offline", "groq", "gemini", "ollama"
+    "ai_model": "",            # Custom user-defined model name string (overrides provider default if set)
     "groq_api_key": "",
-    "groq_vision_model": "",  # empty = use the built-in default
+    "groq_vision_model": "llama-3.2-90b-vision-preview",
     "gemini_api_key": "",
-    "gemini_vision_model": "",  # empty = use the built-in default
+    "gemini_vision_model": "gemini-1.5-flash",
+    "ollama_endpoint": "http://localhost:11434",
+    "ollama_vision_model": "qwen2-vl",
     "tally_host": "localhost",
     "tally_port": 9000,
     # Company GST profile — used to pre-fill vouchers and, later, for
-    # in-app GST reports. Purely informational at this stage: nothing in
-    # the OCR/Tally push pipeline reads these yet, so saving them cannot
-    # affect any existing flow.
+    # in-app GST reports.
     "company_name": "",
     "gstin": "",
     "state_code": "",
     "default_gst_rate": 18.0,
-    "active_company_id": 0,  # 0 = not set yet; database.py's bootstrap picks a default on first run
+    "active_company_id": 0,
 }
 
 
@@ -38,8 +39,11 @@ def get_settings() -> dict:
     path = _settings_path()
     saved = {}
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            saved = json.load(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+        except Exception:
+            saved = {}
 
     merged = dict(DEFAULTS)
     merged.update({k: v for k, v in saved.items() if v not in (None, "")})
@@ -48,13 +52,19 @@ def get_settings() -> dict:
     if not merged["groq_api_key"]:
         merged["groq_api_key"] = os.environ.get("GROQ_API_KEY", "")
     if not merged["groq_vision_model"]:
-        merged["groq_vision_model"] = os.environ.get("GROQ_VISION_MODEL", "")
+        merged["groq_vision_model"] = os.environ.get("GROQ_VISION_MODEL", "llama-3.2-90b-vision-preview")
     if not saved.get("ai_provider"):
-        merged["ai_provider"] = os.environ.get("AI_PROVIDER", "groq")
+        merged["ai_provider"] = os.environ.get("AI_PROVIDER", "offline")
+    if not merged.get("ai_model"):
+        merged["ai_model"] = os.environ.get("AI_MODEL", "")
     if not merged["gemini_api_key"]:
         merged["gemini_api_key"] = os.environ.get("GEMINI_API_KEY", "")
     if not merged["gemini_vision_model"]:
-        merged["gemini_vision_model"] = os.environ.get("GEMINI_VISION_MODEL", "")
+        merged["gemini_vision_model"] = os.environ.get("GEMINI_VISION_MODEL", "gemini-1.5-flash")
+    if not merged["ollama_endpoint"]:
+        merged["ollama_endpoint"] = os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434")
+    if not merged["ollama_vision_model"]:
+        merged["ollama_vision_model"] = os.environ.get("OLLAMA_VISION_MODEL", "qwen2-vl")
     if not saved.get("tally_host"):
         merged["tally_host"] = os.environ.get("TALLY_HOST", "localhost")
     if not saved.get("tally_port"):
@@ -72,16 +82,22 @@ def save_settings(update: dict) -> dict:
     # Push into the current process's environment too, so already-imported
     # modules that read os.environ at call-time (not just import-time) pick
     # the new values up immediately without an app restart.
-    if current.get("groq_api_key"):
-        os.environ["GROQ_API_KEY"] = current["groq_api_key"]
-    if current.get("groq_vision_model"):
-        os.environ["GROQ_VISION_MODEL"] = current["groq_vision_model"]
-    if current.get("ai_provider"):
-        os.environ["AI_PROVIDER"] = current["ai_provider"]
-    if current.get("gemini_api_key"):
-        os.environ["GEMINI_API_KEY"] = current["gemini_api_key"]
-    if current.get("gemini_vision_model"):
-        os.environ["GEMINI_VISION_MODEL"] = current["gemini_vision_model"]
+    if "groq_api_key" in current:
+        os.environ["GROQ_API_KEY"] = current.get("groq_api_key") or ""
+    if "groq_vision_model" in current:
+        os.environ["GROQ_VISION_MODEL"] = current.get("groq_vision_model") or ""
+    if "ai_provider" in current:
+        os.environ["AI_PROVIDER"] = current.get("ai_provider") or "offline"
+    if "ai_model" in current:
+        os.environ["AI_MODEL"] = current.get("ai_model") or ""
+    if "gemini_api_key" in current:
+        os.environ["GEMINI_API_KEY"] = current.get("gemini_api_key") or ""
+    if "gemini_vision_model" in current:
+        os.environ["GEMINI_VISION_MODEL"] = current.get("gemini_vision_model") or ""
+    if "ollama_endpoint" in current:
+        os.environ["OLLAMA_ENDPOINT"] = current.get("ollama_endpoint") or ""
+    if "ollama_vision_model" in current:
+        os.environ["OLLAMA_VISION_MODEL"] = current.get("ollama_vision_model") or ""
     if current.get("tally_host"):
         os.environ["TALLY_HOST"] = str(current["tally_host"])
     if current.get("tally_port"):
@@ -91,14 +107,23 @@ def save_settings(update: dict) -> dict:
 
 
 def has_groq_key() -> bool:
-    """Kept for backward compatibility with any older call sites — checks
-    the Groq key specifically, regardless of which provider is active.
-    For a provider-aware check, use ai_vision.has_ai_key() instead."""
     return bool(get_settings().get("groq_api_key"))
 
 
 def has_gemini_key() -> bool:
     return bool(get_settings().get("gemini_api_key"))
+
+
+def has_ai_key() -> bool:
+    s = get_settings()
+    provider = s.get("ai_provider", "offline")
+    if provider == "groq":
+        return bool(s.get("groq_api_key"))
+    elif provider == "gemini":
+        return bool(s.get("gemini_api_key"))
+    elif provider == "ollama":
+        return True
+    return True  # offline mode is always ready
 
 
 def get_active_company_id() -> int | None:

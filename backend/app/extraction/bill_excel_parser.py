@@ -67,6 +67,7 @@ def _number(value):
 
 HEADER_VARIANTS = {
     "party": ["party", "partyname", "partyledger", "customername", "customer", "suppliername", "supplier", "name", "buyername", "sri", "vendorname", "vendor"],
+    "party_gstin": ["partygstin", "suppliergstin", "customergstin", "gstin", "gstno", "partygstno"],
     "date": ["date", "billdate", "invoicedate", "trandate", "vchdate"],
     "invoice_number": ["invoiceno", "invoicenumber", "billno", "billnumber", "invno", "tranno", "vchno"],
     "taxable_value": ["taxablevalue", "taxableamount", "taxable", "amount", "netamount", "value"],
@@ -169,6 +170,7 @@ class ParsedBillRow:
     # Populated only by the item-wise Tally-template parser below.
     items: list = field(default_factory=list)
     vch_type: str | None = None
+    party_gstin: str | None = None
 
 
 def _excel_serial_to_date(serial: float):
@@ -269,7 +271,10 @@ def _consolidate_invoice_rows(raw_rows: list[ParsedBillRow]) -> list[ParsedBillR
                 rate_breakdown=list(line_breakdown),
                 items=list(r.items),
                 vch_type=r.vch_type,
+                party_gstin=r.party_gstin,
             )
+        elif not grouped_map[key].party_gstin and r.party_gstin:
+            grouped_map[key].party_gstin = r.party_gstin
         else:
             existing = grouped_map[key]
             existing.taxable_value = round(existing.taxable_value + r.taxable_value, 2)
@@ -344,6 +349,7 @@ _ITEM_TEMPLATE_HEADERS = {
     "vch_type": ["vchtype"],
     "invoice_number": ["vchno", "invoiceno", "invoicenumber", "billno", "billnumber"],
     "party": ["partyledger", "party", "partyname", "customername", "customer"],
+    "party_gstin": ["partygstin", "suppliergstin", "customergstin", "gstin", "gstno"],
     "sales_ledger": ["salesledger"],
     "stock_item": ["stockitem"],
     "quantity": ["quantity", "qty"],
@@ -466,6 +472,8 @@ def _extract_item_rows(sheet, header_row: int, cols: dict, rate_buckets: list) -
         # path, since the deterministic item-template header set doesn't
         # define these keys, so `cols.get(...)` is simply None there and
         # this is a no-op.
+        party_gstin_val = str(get(row, "party_gstin") or "").strip() or None
+
         if cgst == 0.0 and sgst == 0.0 and igst == 0.0:
             flat_cgst = _number(get(row, "cgst_amount")) or 0.0
             flat_sgst = _number(get(row, "sgst_amount")) or 0.0
@@ -479,6 +487,16 @@ def _extract_item_rows(sheet, header_row: int, cols: dict, rate_buckets: list) -
                 rate = explicit_rate
             elif amount:
                 rate = _closest_rate(((cgst + sgst + igst) / amount) * 100)
+
+        # Auto-compute tax when rate exists but explicit tax columns are missing
+        if rate > 0 and cgst == 0.0 and sgst == 0.0 and igst == 0.0 and amount > 0:
+            tot_tax = round(amount * rate / 100.0, 2)
+            s = get_settings()
+            routing = determine_gst_tax_routing(s.get("gstin"), s.get("state_code"), party_gstin_val)
+            if routing == "INTER":
+                igst = tot_tax
+            else:
+                cgst, sgst = split_tax_amount(tot_tax)
 
         round_off = _number(get(row, "round_off")) or 0.0
         line_total = round(amount + cgst + sgst + igst + round_off, 2)
@@ -505,6 +523,7 @@ def _extract_item_rows(sheet, header_row: int, cols: dict, rate_buckets: list) -
             cgst=cgst, sgst=sgst, igst=igst,
             total_value=line_total, warnings=base_warnings,
             items=item_line, vch_type=vch_type_val,
+            party_gstin=party_gstin_val,
         ))
 
     return raw_rows
@@ -581,7 +600,7 @@ def _parse_via_ai_mapping(sheet) -> list[ParsedBillRow] | None:
     note = mapping.get("notes")
     if note:
         for row in consolidated:
-            row.warnings.append(f"Columns identified automatically by AI — please double check: {note}")
+            row.warnings.append(f"Columns mapped automatically: {note}")
     return consolidated
 
 
@@ -626,6 +645,7 @@ def parse_bill_excel(file_path: str) -> list[ParsedBillRow]:
         date_str = _parse_date_cell(get(row, "date"))
 
         party = str(get(row, "party") or "").strip() or None
+        party_gstin = str(get(row, "party_gstin") or "").strip() or None
         invoice_number = str(get(row, "invoice_number") or "").strip() or None
         base_warnings = []
         if not date_str:
@@ -675,6 +695,16 @@ def parse_bill_excel(file_path: str) -> list[ParsedBillRow]:
             if taxable is None:
                 taxable = round((total or 0) - cgst - sgst - igst, 2)
 
+            # Auto-calculate taxes when rate exists but no tax amount columns were present
+            if rate > 0 and cgst == 0.0 and sgst == 0.0 and igst == 0.0 and taxable:
+                calc_tax = round(taxable * rate / 100.0, 2)
+                s = get_settings()
+                routing = determine_gst_tax_routing(s.get("gstin"), s.get("state_code"), party_gstin)
+                if routing == "INTER":
+                    igst = calc_tax
+                else:
+                    cgst, sgst = split_tax_amount(calc_tax)
+
         if total is None:
             total = round(taxable + cgst + sgst + igst, 2)
 
@@ -683,6 +713,7 @@ def parse_bill_excel(file_path: str) -> list[ParsedBillRow]:
             taxable_value=round(taxable, 2), gst_rate=rate,
             cgst=round(cgst, 2), sgst=round(sgst, 2), igst=round(igst, 2),
             total_value=round(total, 2), warnings=base_warnings,
+            party_gstin=party_gstin,
         ))
 
     if not raw_rows:

@@ -2,79 +2,89 @@ import { useState } from "react";
 import { api } from "./api.js";
 
 export default function FirstRunSetup({ onDone }) {
-  const [groqKey, setGroqKey] = useState("");
+  const [tallyHost, setTallyHost] = useState("localhost");
+  const [tallyPort, setTallyPort] = useState(9000);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
 
-  const save = async () => {
-    if (!groqKey.trim()) {
-      setError("Paste your Groq API key to continue.");
-      return;
-    }
+  const start = async () => {
     setSaving(true);
-    setError("");
     try {
-      await api.saveSettings({ groq_api_key: groqKey.trim() });
+      await api.saveSettings({
+        tally_host: tallyHost.trim() || "localhost",
+        tally_port: Number(tallyPort) || 9000,
+        ai_provider: "offline",
+      });
       onDone();
-    } catch (e) {
-      setError(e.message || "Something went wrong saving the key.");
+    } catch {
+      onDone();
     } finally {
       setSaving(false);
     }
   };
 
-  const skip = () => onDone();
-
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
       <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-sm p-8">
-        <div className="w-12 h-12 rounded-xl bg-violet-600 text-white flex items-center justify-center text-lg font-bold mb-5">
+        <div className="w-12 h-12 rounded-xl bg-violet-600 text-white flex items-center justify-center text-lg font-bold mb-5 shadow-sm">
           T
         </div>
         <h1 className="text-xl font-semibold text-slate-900 mb-1">Welcome to TEasy</h1>
         <p className="text-sm text-slate-500 mb-6">
-          One quick step before you start — TEasy uses Groq's AI to read your bills
-          accurately, including handwriting. It's free to get a key.
+          100% Local &amp; Offline Accounting Bridge. Your bills, PDFs, and spreadsheets
+          are processed directly on your machine with zero cloud dependencies and maximum privacy.
         </p>
 
-        <label className="block text-xs font-medium text-slate-500 mb-1">Groq API key</label>
-        <input
-          type="password"
-          autoFocus
-          value={groqKey}
-          onChange={(e) => setGroqKey(e.target.value)}
-          placeholder="gsk_..."
-          className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-1"
-        />
-        {error && <p className="text-xs text-rose-600 mb-2">{error}</p>}
-        <a
-          href="https://console.groq.com/keys"
-          target="_blank"
-          rel="noreferrer"
-          className="text-xs text-violet-600 underline"
-        >
-          Get a free key at console.groq.com/keys
-        </a>
-
-        <div className="flex items-center gap-3 mt-6">
-          <button
-            onClick={save}
-            disabled={saving}
-            className="flex-1 text-sm px-4 py-2.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
-          >
-            {saving ? "Saving…" : "Save and continue"}
-          </button>
-          <button
-            onClick={skip}
-            className="text-sm px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50"
-          >
-            Skip for now
-          </button>
+        <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 mb-6 space-y-2 text-xs text-slate-600">
+          <div className="flex items-center gap-2">
+            <span className="text-emerald-600 font-bold">✓</span>
+            <span><strong>B2B e-Invoice QR Scanner:</strong> Instant 100% verified data</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-emerald-600 font-bold">✓</span>
+            <span><strong>Digital PDF Vector Parser:</strong> Exact line items &amp; totals</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-emerald-600 font-bold">✓</span>
+            <span><strong>Fuzzy Header Profiler:</strong> Rapid automated spreadsheet imports</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-emerald-600 font-bold">✓</span>
+            <span><strong>Local OCR Engine:</strong> Safe on-premise scan processing</span>
+          </div>
         </div>
-        <p className="text-xs text-slate-400 mt-4">
-          You can add or change this anytime in General Settings. Without a key, TEasy
-          still works using a less accurate built-in OCR fallback.
-        </p>
+
+        <div className="space-y-3 mb-6">
+          <label className="block text-xs font-medium text-slate-500">Tally Prime Connection</label>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="col-span-2">
+              <input
+                type="text"
+                value={tallyHost}
+                onChange={(e) => setTallyHost(e.target.value)}
+                placeholder="localhost"
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <input
+                type="number"
+                value={tallyPort}
+                onChange={(e) => setTallyPort(e.target.value)}
+                placeholder="9000"
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
+          <p className="text-[11px] text-slate-400">Default: localhost:9000 (XML Server in Tally Prime)</p>
+        </div>
+
+        <button
+          onClick={start}
+          disabled={saving}
+          className="w-full text-sm px-4 py-2.5 rounded-lg bg-violet-600 text-white font-medium hover:bg-violet-700 disabled:opacity-50 transition"
+        >
+          {saving ? "Configuring…" : "Get Started"}
+        </button>
       </div>
     </div>
   );
